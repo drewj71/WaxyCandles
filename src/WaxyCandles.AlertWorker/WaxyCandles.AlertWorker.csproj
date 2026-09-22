@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-WaxyCandles.AlertWorker-5d99af3d-0a9c-429f-b9ea-d0e4eb580040</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WaxyCandles.Application\WaxyCandles.Application.csproj" />
+    <ProjectReference Include="..\WaxyCandles.Infrastructure\WaxyCandles.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
