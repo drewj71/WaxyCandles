@@ -56,12 +56,14 @@ public class StocksController : ControllerBase
     [HttpGet("{symbol}")]
     public async Task<IActionResult> GetStockDetails(
         string symbol,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromQuery] CandleInterval interval = CandleInterval.OneDay)
     {
         var stock =
             await _historicalMarketDataService
                 .GetStockDetailsAsync(
                     symbol,
+                    interval,
                     cancellationToken);
 
         return Ok(stock);

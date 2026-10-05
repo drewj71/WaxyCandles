@@ -80,21 +80,32 @@ public class HistoricalMarketDataService
 
     public async Task<StockDetailsDto> GetStockDetailsAsync(
         string symbol,
+        CandleInterval interval,
         CancellationToken cancellationToken = default)
     {
         var normalizedSymbol =
             symbol.Trim().ToUpperInvariant();
 
-        var quote =
-            await _marketDataProvider.GetCurrentQuoteAsync(
-                normalizedSymbol,
-                cancellationToken);
+        var latestPrice = await _dbContext.StockPrices
+            .Where(x => x.Symbol == normalizedSymbol)
+            .OrderByDescending(x => x.Timestamp)
+            .FirstOrDefaultAsync(cancellationToken);
 
         var historicalCandles =
             await GetHistoricalCandlesAsync(
-                symbol,
-                CandleInterval.OneDay,
+                normalizedSymbol,
+                interval,
                 cancellationToken);
+
+        var quote = latestPrice is null
+            ? null
+            : new MarketQuote
+            {
+                Symbol = latestPrice.Symbol,
+                Price = latestPrice.Price,
+                Change = latestPrice.Change,
+                ChangePercent = latestPrice.ChangePercent
+            };
 
         return new StockDetailsDto
         {

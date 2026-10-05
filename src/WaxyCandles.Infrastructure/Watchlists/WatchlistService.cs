@@ -10,14 +10,10 @@ namespace WaxyCandles.Infrastructure.Watchlists;
 public class WatchlistService : IWatchlistService
 {
     private readonly AppDbContext _dbContext;
-    private readonly IMarketDataProvider _marketDataProvider;
 
-    public WatchlistService(
-        AppDbContext dbContext,
-        IMarketDataProvider marketDataProvider)
+    public WatchlistService(AppDbContext dbContext)
     {
         _dbContext = dbContext;
-        _marketDataProvider = marketDataProvider;
     }
 
     public async Task<IReadOnlyList<string>> GetWatchlistAsync(
@@ -93,8 +89,8 @@ public class WatchlistService : IWatchlistService
     }
 
     public async Task<IReadOnlyList<WatchlistStockDto>> GetWatchlistWithQuotesAsync(
-        string userId,
-        CancellationToken cancellationToken = default)
+    string userId,
+    CancellationToken cancellationToken = default)
     {
         var symbols = await _dbContext.Watchlists
             .Where(x => x.UserId == userId)
@@ -102,27 +98,27 @@ public class WatchlistService : IWatchlistService
             .Select(x => x.Symbol)
             .ToListAsync(cancellationToken);
 
-        var results = new List<WatchlistStockDto>();
-
-        foreach (var symbol in symbols)
+        if (symbols.Count == 0)
         {
-            var quote = await _marketDataProvider
-                .GetCurrentQuoteAsync(
-                    symbol,
-                    cancellationToken);
-
-            if (quote is null)
-                continue;
-
-            results.Add(new WatchlistStockDto
-            {
-                Symbol = quote.Symbol,
-                Price = quote.Price,
-                Change = quote.Change,
-                ChangePercent = quote.ChangePercent
-            });
+            return [];
         }
 
-        return results;
+        var latestPrices = await _dbContext.StockPrices
+            .Where(x => symbols.Contains(x.Symbol))
+            .GroupBy(x => x.Symbol)
+            .Select(g => g
+                .OrderByDescending(x => x.Timestamp)
+                .First())
+            .ToListAsync(cancellationToken);
+
+        return latestPrices
+            .Select(x => new WatchlistStockDto
+            {
+                Symbol = x.Symbol,
+                Price = x.Price,
+                Change = x.Change,
+                ChangePercent = x.ChangePercent
+            })
+            .ToList();
     }
 }

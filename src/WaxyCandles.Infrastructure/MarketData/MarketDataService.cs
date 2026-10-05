@@ -23,11 +23,20 @@ public class MarketDataService : IMarketDataService
     public async Task UpdatePricesAsync(
         CancellationToken cancellationToken = default)
     {
-        var symbols = await _dbContext.Alerts
+        var alertSymbols = await _dbContext.Alerts
             .Where(a => !a.IsTriggered)
             .Select(a => a.Symbol)
             .Distinct()
             .ToListAsync(cancellationToken);
+
+        var watchlistSymbols = await _dbContext.Watchlists
+            .Select(w => w.Symbol)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var symbols = alertSymbols
+            .Union(watchlistSymbols)
+            .ToList();
 
         foreach (var symbol in symbols)
         {
@@ -46,6 +55,8 @@ public class MarketDataService : IMarketDataService
                 Id = Guid.NewGuid(),
                 Symbol = symbol,
                 Price = quote.Price,
+                Change = quote.Change,
+                ChangePercent = quote.ChangePercent,
                 Timestamp = timestamp
             };
 
@@ -62,7 +73,7 @@ public class MarketDataService : IMarketDataService
                 Id = message.MessageId,
                 Type = nameof(StockPriceUpdatedMessage),
                 Payload = JsonSerializer.Serialize(message),
-                CreatedAt = DateTimeOffset.UtcNow
+                CreatedAt = timestamp
             };
 
             _dbContext.StockPrices.Add(stockPrice);

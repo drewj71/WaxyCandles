@@ -17,5 +17,6 @@ public interface IHistoricalMarketDataService
 
     Task<StockDetailsDto> GetStockDetailsAsync(
         string symbol,
+        CandleInterval interval,
         CancellationToken cancellationToken = default);
 }
