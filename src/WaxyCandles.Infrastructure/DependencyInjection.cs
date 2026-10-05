@@ -83,14 +83,29 @@ public static class DependencyInjection
                         ValidateAudience = true,
                         ValidateLifetime = true,
                         ValidateIssuerSigningKey = true,
-
+            
                         ValidIssuer = jwt["Issuer"],
                         ValidAudience = jwt["Audience"],
-
+            
                         IssuerSigningKey =
                             new SymmetricSecurityKey(
                                 Encoding.UTF8.GetBytes(jwt["Secret"]!))
                     };
+            
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        if (context.Request.Cookies.TryGetValue(
+                                "waxy_access_token",
+                                out var accessToken))
+                        {
+                            context.Token = accessToken;
+                        }
+            
+                        return Task.CompletedTask;
+                    }
+                };
             });
 
         services.AddAuthorization();
