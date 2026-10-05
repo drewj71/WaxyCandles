@@ -57,9 +57,25 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
                 "Global Quote",
                 out var quote))
         {
-            return null;
-        }
+            if (document.RootElement.TryGetProperty(
+                    "Information",
+                    out var information))
+            {
+                throw new InvalidOperationException(
+                    $"Alpha Vantage error: {information.GetString()}");
+            }
 
+            if (document.RootElement.TryGetProperty(
+                    "Note",
+                    out var note))
+            {
+                throw new InvalidOperationException(
+                    $"Alpha Vantage error: {note.GetString()}");
+            }
+
+            throw new InvalidOperationException(
+                $"Alpha Vantage did not return quote data for {symbol}.");
+        }
         var price = decimal.Parse(
             quote.GetProperty("05. price").GetString()!,
             CultureInfo.InvariantCulture);
