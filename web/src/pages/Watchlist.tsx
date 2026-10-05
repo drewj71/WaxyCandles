@@ -1,19 +1,24 @@
+import { useForm } from "react-hook-form";
 import {
-    useEffect,
-    useState,
-    type KeyboardEvent,
-} from "react";
+    useMutation,
+    useQuery,
+    useQueryClient,
+} from "@tanstack/react-query";
 import { Plus, Star, Trash2 } from "lucide-react";
 
 import {
     addToWatchlist,
     getWatchlistQuotes,
     removeFromWatchlist,
-    type WatchlistStock,
 } from "@/api/watchlist";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+    Card,
+    CardContent,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 import {
@@ -24,99 +29,80 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
-import { Link } from "react-router-dom";
+
+import { Link } from "@tanstack/react-router";
 
 function Watchlist() {
-    const [stocks, setStocks] = useState<
-        WatchlistStock[]
-    >([]);
+    type WatchlistFormValues = {
+        symbol: string;
+    };
 
-    const [symbol, setSymbol] = useState("");
-    const [loading, setLoading] = useState(true);
-    const [adding, setAdding] = useState(false);
-    const [error, setError] = useState("");
+    const {
+        register,
+        handleSubmit,
+        reset,
+    } = useForm<WatchlistFormValues>({
+        defaultValues: {
+            symbol: "",
+        },
+    });
 
-    async function loadWatchlist() {
-        try {
-            setError("");
+    const queryClient = useQueryClient();
 
-            const data = await getWatchlistQuotes();
+    const watchlistQuery = useQuery({
+        queryKey: ["watchlist"],
+        queryFn: getWatchlistQuotes,
+    });
 
-            setStocks(data);
-        } catch (err) {
-            console.error(err);
-            setError(
-                "Failed to load your watchlist.",
-            );
-        } finally {
-            setLoading(false);
-        }
-    }
+    const addMutation = useMutation({
+        mutationFn: addToWatchlist,
 
-    useEffect(() => {
-        loadWatchlist();
-    }, []);
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({
+                queryKey: ["watchlist"],
+            });
+        },
+    });
 
-    async function handleAdd() {
+    const removeMutation = useMutation({
+        mutationFn: removeFromWatchlist,
+
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({
+                queryKey: ["watchlist"],
+            });
+        },
+    });
+
+    const error =
+        watchlistQuery.error
+            ? "Failed to load your watchlist."
+            : addMutation.error
+                ? "Failed to add symbol to watchlist."
+                : removeMutation.error
+                    ? "Failed to remove symbol."
+                    : "";
+
+    function handleAdd(data: WatchlistFormValues) {
         const normalizedSymbol =
-            symbol.trim().toUpperCase();
+            data.symbol.trim().toUpperCase();
 
         if (!normalizedSymbol) {
             return;
         }
 
-        try {
-            setAdding(true);
-            setError("");
-
-            await addToWatchlist(
-                normalizedSymbol,
-            );
-
-            setSymbol("");
-
-            await loadWatchlist();
-        } catch (err) {
-            console.error(err);
-            setError(
-                "Failed to add symbol to watchlist.",
-            );
-        } finally {
-            setAdding(false);
-        }
+        addMutation.mutate(normalizedSymbol, {
+            onSuccess: () => {
+                reset();
+            },
+        });
     }
 
-    async function handleRemove(
-        stockSymbol: string,
-    ) {
-        try {
-            setError("");
-
-            await removeFromWatchlist(
-                stockSymbol,
-            );
-
-            setStocks((current) =>
-                current.filter(
-                    (stock) =>
-                        stock.symbol !== stockSymbol,
-                ),
-            );
-        } catch (err) {
-            console.error(err);
-            setError(
-                "Failed to remove symbol.",
-            );
-        }
+    function handleRemove(stockSymbol: string) {
+        removeMutation.mutate(stockSymbol);
     }
 
-    function handleKeyDown(
-        event: KeyboardEvent<HTMLInputElement>,
-    ) {
-        if (event.key === "Enter") {
-            handleAdd();
-        }
-    }
+    const stocks = watchlistQuery.data ?? [];
 
     return (
         <div className="mx-auto max-w-7xl space-y-6">
@@ -138,28 +124,27 @@ function Watchlist() {
                 </CardHeader>
 
                 <CardContent>
-                    <div className="flex max-w-md gap-2">
+                    <form
+                        onSubmit={handleSubmit(handleAdd)}
+                        className="flex max-w-md gap-2"
+                    >
                         <Input
                             placeholder="Enter symbol (e.g. AAPL)"
-                            value={symbol}
-                            onChange={(event) =>
-                                setSymbol(event.target.value)
-                            }
-                            onKeyDown={handleKeyDown}
-                            disabled={adding}
+                            {...register("symbol")}
+                            disabled={addMutation.isPending}
                         />
 
                         <Button
-                            onClick={handleAdd}
-                            disabled={
-                                adding ||
-                                !symbol.trim()
-                            }
+                            type="submit"
+                            disabled={addMutation.isPending}
                         >
                             <Plus />
-                            {adding ? "Adding..." : "Add"}
+
+                            {addMutation.isPending
+                                ? "Adding..."
+                                : "Add"}
                         </Button>
-                    </div>
+                    </form>
                 </CardContent>
             </Card>
 
@@ -178,7 +163,7 @@ function Watchlist() {
                 </CardHeader>
 
                 <CardContent className="p-0">
-                    {loading ? (
+                    {watchlistQuery.isLoading ? (
                         <div className="flex h-32 items-center justify-center">
                             <p className="text-sm text-muted-foreground">
                                 Loading watchlist...
@@ -228,7 +213,10 @@ function Watchlist() {
                                         >
                                             <TableCell className="font-semibold">
                                                 <Link
-                                                    to={`/stocks/${stock.symbol}`}
+                                                    to="/stocks/$symbol"
+                                                    params={{
+                                                        symbol: stock.symbol,
+                                                    }}
                                                     className="hover:underline"
                                                 >
                                                     {stock.symbol}
@@ -265,8 +253,12 @@ function Watchlist() {
                                                             stock.symbol,
                                                         )
                                                     }
+                                                    disabled={
+                                                        removeMutation.isPending
+                                                    }
                                                 >
                                                     <Trash2 />
+
                                                     <span className="sr-only">
                                                         Remove{" "}
                                                         {stock.symbol}

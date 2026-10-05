@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Star } from "lucide-react";
-
-import { getStockDetails, type StockDetails } from "@/api/stocks";
+import { Route } from "@/routes/_dashboard/stocks/$symbol";
+import { getStockDetails } from "@/api/stocks";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,71 +16,40 @@ import {
 import StockCandlestickChart from "@/components/charts/StockCandlestickChart";
 
 function Stock() {
-    const { symbol } = useParams<{
-        symbol: string;
-    }>();
-
-    const [stock, setStock] =
-        useState<StockDetails | null>(null);
-
-    const [loading, setLoading] =
-        useState(true);
-
-    const [loadingTimeframe, setLoadingTimeframe] =
-        useState(false);
+    const { symbol } = Route.useParams();
 
     const [timeframe, setTimeframe] =
         useState("1D");
 
-    const [error, setError] =
-        useState("");
+    const intervalMap: Record<string, string> = {
+        "1D": "OneDay",
+        "1H": "OneHour",
+        "30m": "ThirtyMinutes",
+        "15m": "FifteenMinutes",
+        "5m": "FiveMinutes",
+    };
 
-    useEffect(() => {
-        if (!symbol) {
-            return;
-        }
+    const stockQuery = useQuery({
+        queryKey: [
+            "stock",
+            symbol,
+            timeframe,
+        ],
 
-        async function loadStock() {
-            try {
-                if (!stock) {
-                    setLoading(true);
-                } else {
-                    setLoadingTimeframe(true);
-                }
+        queryFn: () =>
+            getStockDetails(
+                symbol.toUpperCase(),
+                intervalMap[timeframe],
+            ),
 
-                setError("");
+        enabled: !!symbol,
+    });
 
-                const intervalMap: Record<string, string> = {
-                    "1D": "OneDay",
-                    "1H": "OneHour",
-                    "30m": "ThirtyMinutes",
-                    "15m": "FifteenMinutes",
-                    "5m": "FiveMinutes",
-                };
+    const loadingTimeframe =
+        stockQuery.isFetching &&
+        !stockQuery.isLoading;
 
-                const data =
-                    await getStockDetails(
-                        symbol!.toUpperCase(),
-                        intervalMap[timeframe],
-                    );
-
-                setStock(data);
-            } catch (err) {
-                console.error(err);
-
-                setError(
-                    "Failed to load stock data.",
-                );
-            } finally {
-                setLoading(false);
-                setLoadingTimeframe(false);
-            }
-        }
-
-        loadStock();
-    }, [symbol, timeframe]);
-
-    if (loading) {
+    if (stockQuery.isLoading) {
         return (
             <div className="flex min-h-64 items-center justify-center">
                 <p className="text-sm text-muted-foreground">
@@ -89,7 +59,7 @@ function Stock() {
         );
     }
 
-    if (error || !stock || !stock.quote) {
+    if (stockQuery.error || !stockQuery.data || !stockQuery.data.quote) {
         return (
             <div className="space-y-4">
                 <Button
@@ -105,6 +75,12 @@ function Stock() {
                 </div>
             </div>
         );
+    }
+
+    const stock = stockQuery.data;
+
+    if (!stock.quote) {
+        return null;
     }
 
     const { quote } = stock;
@@ -192,7 +168,13 @@ function Stock() {
             {/* Price Chart */}
             <Card>
                 <CardContent>
-                    {stock.historicalCandles.length > 0 ? (
+                    {loadingTimeframe ? (
+                        <div className="flex h-[450px] items-center justify-center">
+                            <p className="text-sm text-muted-foreground">
+                                Loading {timeframe} data...
+                            </p>
+                        </div>
+                    ) : stock.historicalCandles.length > 0 ? (
                         <StockCandlestickChart
                             candles={stock.historicalCandles}
                             timeframe={timeframe}

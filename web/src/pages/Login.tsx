@@ -1,11 +1,9 @@
 import { type FormEvent, useState } from "react";
 import { login } from "../api/auth";
+import { useNavigate } from "@tanstack/react-router";
 
-interface LoginProps {
-    onLogin: () => void;
-}
-
-function Login({ onLogin }: LoginProps) {
+function Login() {
+    const navigate = useNavigate();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
@@ -25,7 +23,9 @@ function Login({ onLogin }: LoginProps) {
                 password,
             });
 
-            onLogin();
+            await navigate({
+                to: "/dashboard",
+            });
         } catch (err) {
             console.error(err);
             setError("Invalid email or password.");

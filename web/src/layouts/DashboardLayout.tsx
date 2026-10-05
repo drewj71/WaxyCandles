@@ -7,7 +7,7 @@ import {
     Settings,
     Star,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link } from "@tanstack/react-router";
 
 import {
     Sidebar,
@@ -54,14 +54,14 @@ const navigation = [
     {
         title: "Markets",
         icon: BarChart3,
-        href: "/markets",
+        href: "/",
     },
     {
         title: "Alerts",
         icon: Bell,
         href: "/alerts",
     },
-];
+] as const;
 
 function DashboardLayout({
     children,
@@ -125,7 +125,7 @@ function DashboardLayout({
                             <SidebarMenuItem>
                                 <SidebarMenuButton
                                     render={
-                                        <Link to="/settings" />
+                                        <Link to="/" />
                                     }
                                 >
                                     <Settings />
@@ -158,7 +158,7 @@ function DashboardLayout({
                                     >
                                         <DropdownMenuItem
                                             render={
-                                                <Link to="/settings" />
+                                                <Link to="/" />
                                             }
                                         >
                                             <Settings />
