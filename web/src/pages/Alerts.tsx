@@ -1,62 +1,131 @@
-import { useEffect, useState } from "react";
-
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
 import {
     createAlert,
+    deleteAlert,
     getAlerts,
-    type Alert,
+    updateAlert,
 } from "@/api/alerts";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+    Card,
+    CardContent,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card";
 
 function Alerts() {
-    const [alerts, setAlerts] =
-        useState<Alert[]>([]);
-
-    const [loading, setLoading] =
-        useState(true);
-
-    const [error, setError] =
-        useState("");
-
     const [showCreateForm, setShowCreateForm] =
         useState(false);
 
-    const [symbol, setSymbol] =
-        useState("");
+    const [editingAlertId, setEditingAlertId] =
+        useState<string | null>(null);
 
-    const [targetPrice, setTargetPrice] =
-        useState("");
+    const queryClient = useQueryClient();
 
-    const [direction, setDirection] =
-        useState<"Above" | "Below">("Above");
+    const alertsQuery = useQuery({
+        queryKey: ["alerts"],
+        queryFn: getAlerts,
+    });
 
-    const [creating, setCreating] =
-        useState(false);
+    const alerts = alertsQuery.data ?? [];
 
-    useEffect(() => {
-        async function loadAlerts() {
-            try {
-                setLoading(true);
-                setError("");
+    type CreateAlertFormValues = {
+        symbol: string;
+        targetPrice: string;
+        direction: "Above" | "Below";
+    };
 
-                const data =
-                    await getAlerts();
+    const {
+        register,
+        handleSubmit,
+        reset,
+        formState: { errors },
+    } = useForm<CreateAlertFormValues>({
+        defaultValues: {
+            symbol: "",
+            targetPrice: "",
+            direction: "Above",
+        },
+    });
 
-                setAlerts(data);
-            } catch (err) {
-                console.error(err);
+    type EditAlertFormValues = {
+        targetPrice: string;
+        direction: "Above" | "Below";
+    };
 
-                setError(
-                    "Failed to load alerts.",
-                );
-            } finally {
-                setLoading(false);
-            }
-        }
+    const {
+        register: registerEdit,
+        handleSubmit: handleEditSubmit,
+        reset: resetEdit,
+    } = useForm<EditAlertFormValues>({
+        defaultValues: {
+            targetPrice: "",
+            direction: "Above",
+        },
+    });
 
-        loadAlerts();
-    }, []);
+    const createMutation = useMutation({
+        mutationFn: (data: CreateAlertFormValues) =>
+            createAlert({
+                symbol: data.symbol.trim().toUpperCase(),
+                targetPrice: Number(data.targetPrice),
+                direction: data.direction,
+            }),
+        onSuccess: async () => {
+            reset();
+            setShowCreateForm(false);
 
-    if (loading) {
+            await queryClient.invalidateQueries({
+                queryKey: ["alerts"],
+            });
+        },
+    });
+
+    const updateMutation = useMutation({
+        mutationFn: ({
+            id,
+            targetPrice,
+            direction,
+        }: {
+            id: string;
+            targetPrice: number;
+            direction: "Above" | "Below";
+        }) =>
+            updateAlert(id, {
+                targetPrice,
+                direction,
+            }),
+
+        onSuccess: async () => {
+            setEditingAlertId(null);
+
+            await queryClient.invalidateQueries({
+                queryKey: ["alerts"],
+            });
+        },
+
+        onError: (error) => {
+            console.error("Failed to update alert:", error);
+        },
+    });
+
+    const deleteMutation = useMutation({
+        mutationFn: deleteAlert,
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({
+                queryKey: ["alerts"],
+            });
+        },
+    });
+
+    const createError = createMutation.error
+        ? "Failed to create alert."
+        : "";
+
+    if (alertsQuery.isLoading) {
         return (
             <div className="flex min-h-64 items-center justify-center">
                 <p className="text-sm text-muted-foreground">
@@ -66,10 +135,10 @@ function Alerts() {
         );
     }
 
-    if (error) {
+    if (alertsQuery.error) {
         return (
             <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-                {error}
+                Failed to load alerts.
             </div>
         );
     }
@@ -97,107 +166,93 @@ function Alerts() {
             </div>
 
             {showCreateForm && (
-                <div className="rounded-lg border p-6">
-                    <h2 className="mb-4 text-lg font-semibold">
-                        Create Alert
-                    </h2>
+                <form
+                    onSubmit={handleSubmit((data) =>
+                        createMutation.mutate(data)
+                    )}
+                >
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Create Alert</CardTitle>
+                        </CardHeader>
 
-                    <div className="grid gap-4 md:grid-cols-3">
-                        <div>
-                            <label className="mb-2 block text-sm font-medium">
-                                Symbol
-                            </label>
+                        <CardContent>
+                            <div className="grid gap-4 md:grid-cols-3">
+                                {createError && (
+                                    <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                                        {createError}
+                                    </div>
+                                )}
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium">
+                                        Symbol
+                                    </label>
 
-                            <input
-                                value={symbol}
-                                onChange={(e) =>
-                                    setSymbol(e.target.value.toUpperCase())
-                                }
-                                placeholder="AAPL"
-                                className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-                            />
-                        </div>
+                                    <Input
+                                        placeholder="AAPL"
+                                        {...register("symbol", {
+                                            required: "Symbol is required",
+                                        })} disabled={createMutation.isPending}
+                                    />
+                                    {errors.symbol && (
+                                        <p className="mt-1 text-sm text-destructive">
+                                            {errors.symbol.message}
+                                        </p>
+                                    )}
+                                </div>
 
-                        <div>
-                            <label className="mb-2 block text-sm font-medium">
-                                Target Price
-                            </label>
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium">
+                                        Target Price
+                                    </label>
 
-                            <input
-                                type="number"
-                                step="0.01"
-                                value={targetPrice}
-                                onChange={(e) =>
-                                    setTargetPrice(e.target.value)
-                                }
-                                placeholder="250.00"
-                                className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-                            />
-                        </div>
+                                    <Input
+                                        type="number"
+                                        step="0.01"
+                                        placeholder="250.00"
+                                        {...register("targetPrice", {
+                                            required: "Target price is required",
+                                            validate: (value) =>
+                                                Number(value) > 0 ||
+                                                "Target price must be greater than 0",
+                                        })} disabled={createMutation.isPending}
+                                    />
+                                    {errors.targetPrice && (
+                                        <p className="mt-1 text-sm text-destructive">
+                                            {errors.targetPrice.message}
+                                        </p>
+                                    )}
+                                </div>
 
-                        <div>
-                            <label className="mb-2 block text-sm font-medium">
-                                Direction
-                            </label>
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium">
+                                        Direction
+                                    </label>
 
-                            <select
-                                value={direction}
-                                onChange={(e) =>
-                                    setDirection(
-                                        e.target.value as "Above" | "Below",
-                                    )
-                                }
-                                className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-                            >
-                                <option value="Above">
-                                    Above
-                                </option>
+                                    <select
+                                        {...register("direction")}
+                                        disabled={createMutation.isPending}
+                                        className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                                    >
+                                        <option value="Above">Above</option>
+                                        <option value="Below">Below</option>
+                                    </select>
+                                </div>
+                            </div>
 
-                                <option value="Below">
-                                    Below
-                                </option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div className="mt-4 flex justify-end">
-                        <Button
-                            disabled={creating}
-                            onClick={async () => {
-                                try {
-                                    setCreating(true);
-                                    setError("");
-
-                                    const created = await createAlert({
-                                        symbol: symbol.trim(),
-                                        targetPrice: Number(targetPrice),
-                                        direction,
-                                    });
-
-                                    setAlerts((current) => [
-                                        created,
-                                        ...current,
-                                    ]);
-
-                                    setSymbol("");
-                                    setTargetPrice("");
-                                    setDirection("Above");
-                                    setShowCreateForm(false);
-                                } catch (err) {
-                                    console.error(err);
-
-                                    setError(
-                                        "Failed to create alert.",
-                                    );
-                                } finally {
-                                    setCreating(false);
-                                }
-                            }}
-                        >
-                            {creating ? "Creating..." : "Create Alert"}
-                        </Button>
-                    </div>
-                </div>
+                            <div className="mt-4 flex justify-end">
+                                <Button
+                                    type="submit"
+                                    disabled={createMutation.isPending}
+                                >
+                                    {createMutation.isPending
+                                        ? "Creating..."
+                                        : "Create Alert"}
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </form>
             )}
 
             <div className="rounded-lg border p-6">
@@ -207,29 +262,143 @@ function Alerts() {
                     </p>
                 ) : (
                     <div className="space-y-3">
-                        {alerts.map((alert) => (
-                            <div
-                                key={alert.id}
-                                className="flex items-center justify-between rounded-md border p-4"
-                            >
-                                <div>
-                                    <div className="font-medium">
-                                        {alert.symbol}
+                        {alerts.map((alert) =>
+                            editingAlertId === alert.id ? (
+                                <form
+                                    key={alert.id}
+                                    onSubmit={handleEditSubmit((data) => {
+                                        updateMutation.mutate({
+                                            id: alert.id,
+                                            targetPrice: Number(data.targetPrice),
+                                            direction: data.direction,
+                                        });
+                                    })}
+                                    className="rounded-md border p-4"
+                                >
+                                    <div className="grid gap-4 md:grid-cols-3">
+                                        <div>
+                                            <label className="mb-2 block text-sm font-medium">
+                                                Symbol
+                                            </label>
+
+                                            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                                                {alert.symbol}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="mb-2 block text-sm font-medium">
+                                                Target Price
+                                            </label>
+
+                                            <Input
+                                                type="number"
+                                                step="0.01"
+                                                {...registerEdit("targetPrice", {
+                                                    required: "Target price is required",
+                                                    validate: (value) =>
+                                                        Number(value) > 0 ||
+                                                        "Target price must be greater than 0",
+                                                })}
+                                                disabled={updateMutation.isPending}
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="mb-2 block text-sm font-medium">
+                                                Direction
+                                            </label>
+
+                                            <select
+                                                {...registerEdit("direction")}
+                                                disabled={updateMutation.isPending}
+                                                className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                                            >
+                                                <option value="Above">
+                                                    Above
+                                                </option>
+                                                <option value="Below">
+                                                    Below
+                                                </option>
+                                            </select>
+                                        </div>
                                     </div>
 
-                                    <div className="text-sm text-muted-foreground">
-                                        {alert.direction} $
-                                        {alert.targetPrice.toFixed(2)}
+                                    <div className="mt-4 flex justify-end gap-2">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() =>
+                                                setEditingAlertId(null)
+                                            }
+                                            disabled={updateMutation.isPending}
+                                        >
+                                            Cancel
+                                        </Button>
+
+                                        <Button
+                                            type="submit"
+                                            disabled={updateMutation.isPending}
+                                        >
+                                            {updateMutation.isPending
+                                                ? "Saving..."
+                                                : "Save"}
+                                        </Button>
+                                    </div>
+                                </form>
+                            ) : (
+                                <div
+                                    key={alert.id}
+                                    className="flex items-center justify-between rounded-md border p-4"
+                                >
+                                    <div>
+                                        <div className="font-medium">
+                                            {alert.symbol}
+                                        </div>
+
+                                        <div className="text-sm text-muted-foreground">
+                                            {alert.direction} $
+                                            {alert.targetPrice.toFixed(2)}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-3">
+                                        <div className="text-sm">
+                                            {alert.isTriggered
+                                                ? "Triggered"
+                                                : "Active"}
+                                        </div>
+
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => {
+                                                setEditingAlertId(alert.id);
+
+                                                resetEdit({
+                                                    targetPrice:
+                                                        alert.targetPrice.toString(),
+                                                    direction: alert.direction,
+                                                });
+                                            }}
+                                        >
+                                            Edit
+                                        </Button>
+
+                                        <Button
+                                            variant="destructive"
+                                            size="sm"
+                                            disabled={deleteMutation.isPending}
+                                            onClick={() =>
+                                                deleteMutation.mutate(alert.id)
+                                            }
+                                        >
+                                            Delete
+                                        </Button>
                                     </div>
                                 </div>
-
-                                <div className="text-sm">
-                                    {alert.isTriggered
-                                        ? "Triggered"
-                                        : "Active"}
-                                </div>
-                            </div>
-                        ))}
+                            ),
+                        )}
                     </div>
                 )}
             </div>

@@ -1,87 +1,137 @@
-import { type FormEvent, useState } from "react";
-import { login } from "../api/auth";
+import { useForm } from "react-hook-form";
 import { useNavigate } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
+import { login } from "@/api/auth";
+import { Button } from "@/components/ui/button";
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 
 function Login() {
     const navigate = useNavigate();
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [error, setError] = useState("");
-    const [loading, setLoading] = useState(false);
 
-    async function handleSubmit(
-        event: FormEvent<HTMLFormElement>,
-    ) {
-        event.preventDefault();
+    type LoginFormValues = {
+        email: string;
+        password: string;
+    };
 
-        setError("");
-        setLoading(true);
+    const {
+        register,
+        handleSubmit,
+        formState: { errors, isSubmitting },
+    } = useForm<LoginFormValues>({
+        defaultValues: {
+            email: "",
+            password: "",
+        },
+    });
 
-        try {
-            await login({
-                email,
-                password,
-            });
-
+    const loginMutation = useMutation({
+        mutationFn: login,
+        onSuccess: async () => {
             await navigate({
                 to: "/dashboard",
             });
-        } catch (err) {
-            console.error(err);
-            setError("Invalid email or password.");
-        } finally {
-            setLoading(false);
-        }
+        },
+    });
+
+    function onSubmit(data: LoginFormValues) {
+        loginMutation.mutate(data);
     }
 
     return (
-        <div>
-            <h1>WaxyCandles</h1>
+        <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4">
+            <Card className="w-full max-w-md">
+                <CardHeader className="text-center">
+                    <CardTitle className="text-2xl">
+                        WaxyCandles
+                    </CardTitle>
 
-            <h2>Login</h2>
+                    <CardDescription>
+                        Sign in to your account
+                    </CardDescription>
+                </CardHeader>
 
-            <form onSubmit={handleSubmit}>
-                <div>
-                    <label htmlFor="email">
-                        Email
-                    </label>
+                <CardContent>
+                    <form
+                        onSubmit={handleSubmit(onSubmit)}
+                        className="space-y-4"
+                    >
+                        <div className="space-y-2">
+                            <label
+                                htmlFor="email"
+                                className="text-sm font-medium"
+                            >
+                                Email
+                            </label>
 
-                    <input
-                        id="email"
-                        type="email"
-                        value={email}
-                        onChange={(event) =>
-                            setEmail(event.target.value)
-                        }
-                        required
-                    />
-                </div>
+                            <Input
+                                id="email"
+                                type="email"
+                                placeholder="you@example.com"
+                                autoComplete="email"
+                                {...register("email", {
+                                    required: "Email is required",
+                                })}
+                                disabled={loginMutation.isPending}
+                            />
 
-                <div>
-                    <label htmlFor="password">
-                        Password
-                    </label>
+                            {errors.email && (
+                                <p className="text-sm text-destructive">
+                                    {errors.email.message}
+                                </p>
+                            )}
+                        </div>
 
-                    <input
-                        id="password"
-                        type="password"
-                        value={password}
-                        onChange={(event) =>
-                            setPassword(event.target.value)
-                        }
-                        required
-                    />
-                </div>
+                        <div className="space-y-2">
+                            <label
+                                htmlFor="password"
+                                className="text-sm font-medium"
+                            >
+                                Password
+                            </label>
 
-                {error && <p>{error}</p>}
+                            <Input
+                                id="password"
+                                type="password"
+                                placeholder="Enter your password"
+                                autoComplete="current-password"
+                                {...register("password", {
+                                    required: "Password is required",
+                                })}
+                                disabled={loginMutation.isPending}
+                            />
 
-                <button
-                    type="submit"
-                    disabled={loading}
-                >
-                    {loading ? "Logging in..." : "Login"}
-                </button>
-            </form>
+                            {errors.password && (
+                                <p className="text-sm text-destructive">
+                                    {errors.password.message}
+                                </p>
+                            )}
+                        </div>
+
+                        {loginMutation.isError && (
+                            <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                                Invalid email or password.
+                            </div>
+                        )}
+
+                        <Button
+                            type="submit"
+                            className="w-full"
+                            disabled={loginMutation.isPending}
+                        >
+                            {loginMutation.isPending
+                                ? "Logging in..."
+                                : "Login"}
+                        </Button>
+                    </form>
+                </CardContent>
+            </Card>
         </div>
     );
 }

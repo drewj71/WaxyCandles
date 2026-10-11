@@ -1,13 +1,32 @@
+import { useQuery } from "@tanstack/react-query";
+import { getWatchlistQuotes } from "@/api/watchlist";
+import { getAlerts } from "@/api/alerts";
 import {
     Activity,
     Bell,
     Eye,
     Star,
 } from "lucide-react";
-
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 function Dashboard() {
+    const watchlistQuery = useQuery({
+        queryKey: ["watchlist"],
+        queryFn: getWatchlistQuotes,
+    });
+
+    const alertsQuery = useQuery({
+        queryKey: ["alerts"],
+        queryFn: getAlerts,
+    });
+
+    const stocks = watchlistQuery.data ?? [];
+    const alerts = alertsQuery.data ?? [];
+
+    const activeAlerts = alerts.filter(
+        (alert) => !alert.isTriggered,
+    );
+
     return (
         <div className="mx-auto max-w-7xl space-y-8">
             <div>
@@ -32,7 +51,7 @@ function Dashboard() {
 
                     <CardContent>
                         <div className="text-2xl font-semibold">
-                            0
+                            {watchlistQuery.isLoading ? "—" : stocks.length}
                         </div>
 
                         <p className="text-xs text-muted-foreground">
@@ -52,7 +71,7 @@ function Dashboard() {
 
                     <CardContent>
                         <div className="text-2xl font-semibold">
-                            0
+                            {alertsQuery.isLoading ? "—" : activeAlerts.length}
                         </div>
 
                         <p className="text-xs text-muted-foreground">
@@ -92,7 +111,7 @@ function Dashboard() {
 
                     <CardContent>
                         <div className="text-2xl font-semibold">
-                            0
+                            {watchlistQuery.isLoading ? "—" : stocks.length}
                         </div>
 
                         <p className="text-xs text-muted-foreground">
