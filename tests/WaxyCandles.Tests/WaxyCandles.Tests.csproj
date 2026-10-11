@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\WaxyCandles.Application\WaxyCandles.Application.csproj" />
     <ProjectReference Include="..\..\src\WaxyCandles.Infrastructure\WaxyCandles.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\WaxyCandles.AlertWorker\WaxyCandles.AlertWorker.csproj" />
+    <ProjectReference Include="..\..\src\WaxyCandles.OutboxWorker\WaxyCandles.OutboxWorker.csproj" />
   </ItemGroup>
 
 </Project>

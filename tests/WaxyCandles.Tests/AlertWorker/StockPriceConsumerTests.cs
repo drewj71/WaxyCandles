@@ -1,9 +1,6 @@
 using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using RabbitMQ.Client;
-using RabbitMQ.Client.Exceptions;
 using WaxyCandles.AlertWorker;
 using WaxyCandles.Application.Alerts.Interfaces;
 using WaxyCandles.Application.MarketData.Messages;
@@ -12,6 +9,7 @@ using WaxyCandles.Domain.Enums;
 using WaxyCandles.Infrastructure.Alerts;
 using WaxyCandles.Infrastructure.Persistence;
 using WaxyCandles.Tests.Infrastructure;
+using static WaxyCandles.Tests.Infrastructure.RabbitMqTestBroker;
 
 namespace WaxyCandles.Tests.AlertWorker;
 
@@ -22,39 +20,27 @@ namespace WaxyCandles.Tests.AlertWorker;
 public class StockPriceConsumerTests(IntegrationFixture fixture)
     : DatabaseTestBase(fixture)
 {
-    private const string MainQueue = "stock-price-updated";
-    private const string RetryQueue = "stock-price-retry";
-    private const string DeadLetterQueue = "stock-price-dead-letter";
-    private const string RetryExchange = "stock-price-retry";
-    private const string DeadLetterExchange = "stock-price-dlx";
-
     // The retry queue has a 5s TTL and a message gets three attempts, so the
     // full retry -> dead-letter path takes ~10s. Leave generous headroom.
     private static readonly TimeSpan MessagingTimeout = TimeSpan.FromSeconds(45);
 
-    private readonly List<(ServiceProvider Services, StockPriceConsumer Consumer)> _consumers = [];
+    private readonly RunningWorkers _workers = new();
     private readonly CapturingLoggerProvider _logs = new();
     private readonly EvaluationProbe _probe = new();
-    private IConnection _connection = default!;
+    private RabbitMqTestBroker _broker = default!;
 
     public override async Task InitializeAsync()
     {
         await base.InitializeAsync();
-
-        _connection = await new ConnectionFactory
-        {
-            HostName = Fixture.RabbitMqHost,
-            Port = Fixture.RabbitMqPort
-        }.CreateConnectionAsync();
-
-        await DeleteTopologyAsync();
+        _broker = await ConnectAsync(Fixture);
+        await _broker.DeleteTopologyAsync();
     }
 
     public override async Task DisposeAsync()
     {
-        await StopConsumersAsync();
-        await DeleteTopologyAsync();
-        await _connection.DisposeAsync();
+        await _workers.DisposeAsync();
+        await _broker.DeleteTopologyAsync();
+        await _broker.DisposeAsync();
         await base.DisposeAsync();
     }
 
@@ -65,7 +51,7 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         await StartConsumerAsync();
 
         var message = NewMessage("AAPL", 150m);
-        await PublishAsync(message);
+        await _broker.PublishAsync(message);
 
         await WaitUntilProcessedAsync(message.MessageId);
 
@@ -91,7 +77,7 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         }
 
         await StartConsumerAsync();
-        await PublishAsync(message);
+        await _broker.PublishAsync(message);
 
         await WaitForSkipAsync(message.MessageId);
 
@@ -102,8 +88,8 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         Assert.Empty(_probe.Calls);
 
-        await StopConsumersAsync();
-        Assert.Equal(0u, await MessageCountAsync(MainQueue));
+        await _workers.StopAllAsync();
+        Assert.Equal(0u, await _broker.MessageCountAsync(MainQueue));
     }
 
     [Fact]
@@ -113,11 +99,11 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         var message = NewMessage("AAPL", 150m);
 
-        await PublishAsync(message);
+        await _broker.PublishAsync(message);
         await WaitUntilProcessedAsync(message.MessageId);
 
         // Simulates at-least-once redelivery of the exact same message.
-        await PublishAsync(message);
+        await _broker.PublishAsync(message);
         await WaitForSkipAsync(message.MessageId);
 
         Assert.Single(_probe.Calls);
@@ -137,7 +123,7 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         await StartConsumerAsync();
 
         var message = NewMessage("AAPL", 150m);
-        await PublishAsync(message);
+        await _broker.PublishAsync(message);
 
         await WaitUntilProcessedAsync(message.MessageId);
 
@@ -146,7 +132,7 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         await using var db = NewDbContext();
         Assert.True((await db.Alerts.SingleAsync(a => a.Id == alertId)).IsTriggered);
-        Assert.Equal(0u, await MessageCountAsync(DeadLetterQueue));
+        Assert.Equal(0u, await _broker.MessageCountAsync(DeadLetterQueue));
     }
 
     [Fact]
@@ -159,10 +145,10 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         var message = NewMessage("AAPL", 150m);
         var body = Serialize(message);
-        await PublishAsync(body);
+        await _broker.PublishAsync(body);
 
         await Eventually.TrueAsync(
-            async () => await MessageCountAsync(DeadLetterQueue) == 1,
+            async () => await _broker.MessageCountAsync(DeadLetterQueue) == 1,
             MessagingTimeout,
             "message to land in the dead-letter queue");
 
@@ -178,12 +164,11 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
             Assert.False(await db.ProcessedMessages.AnyAsync(m => m.Id == message.MessageId));
         }
 
-        await using var channel = await _connection.CreateChannelAsync();
-        var deadLettered = await channel.BasicGetAsync(DeadLetterQueue, autoAck: true);
+        var deadLettered = await _broker.GetAsync(DeadLetterQueue);
 
         Assert.NotNull(deadLettered);
         Assert.Equal(body, deadLettered.Body.ToArray());
-        Assert.Equal(0u, await MessageCountAsync(RetryQueue));
+        Assert.Equal(0u, await _broker.MessageCountAsync(RetryQueue));
     }
 
     [Fact]
@@ -191,17 +176,17 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
     {
         await StartConsumerAsync();
 
-        await PublishAsync(Encoding.UTF8.GetBytes("null"));
+        await _broker.PublishAsync(Encoding.UTF8.GetBytes("null"));
 
         await Eventually.TrueAsync(
             () => _logs.Contains("Received invalid stock price message."),
             MessagingTimeout,
             "consumer to reject the null payload");
 
-        await StopConsumersAsync();
+        await _workers.StopAllAsync();
 
-        Assert.Equal(0u, await MessageCountAsync(MainQueue));
-        Assert.Equal(0u, await MessageCountAsync(DeadLetterQueue));
+        Assert.Equal(0u, await _broker.MessageCountAsync(MainQueue));
+        Assert.Equal(0u, await _broker.MessageCountAsync(DeadLetterQueue));
         Assert.Empty(_probe.Calls);
     }
 
@@ -227,8 +212,8 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         await StartConsumerAsync();
 
         var message = NewMessage("AAPL", 150m);
-        await PublishAsync(message);
-        await PublishAsync(message);
+        await _broker.PublishAsync(message);
+        await _broker.PublishAsync(message);
 
         await WaitUntilProcessedAsync(message.MessageId);
 
@@ -239,7 +224,7 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         await using var db = NewDbContext();
         Assert.Equal(1, await db.ProcessedMessages.CountAsync(m => m.Id == message.MessageId));
-        Assert.Equal(0u, await MessageCountAsync(DeadLetterQueue));
+        Assert.Equal(0u, await _broker.MessageCountAsync(DeadLetterQueue));
     }
 
     [Fact(Skip = KnownIssues.MalformedPayloadIsNeverAcked)]
@@ -247,17 +232,17 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
     {
         await StartConsumerAsync();
 
-        await PublishAsync(Encoding.UTF8.GetBytes("{ this is not json"));
+        await _broker.PublishAsync(Encoding.UTF8.GetBytes("{ this is not json"));
 
         // A valid message published afterwards proves the consumer is still running.
         var valid = NewMessage("AAPL", 150m);
-        await PublishAsync(valid);
+        await _broker.PublishAsync(valid);
         await WaitUntilProcessedAsync(valid.MessageId);
 
         // Closing the channel requeues anything still unacked.
-        await StopConsumersAsync();
+        await _workers.StopAllAsync();
 
-        Assert.Equal(0u, await MessageCountAsync(MainQueue));
+        Assert.Equal(0u, await _broker.MessageCountAsync(MainQueue));
     }
 
     private async Task StartConsumerAsync()
@@ -270,29 +255,14 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
                     _probe)),
             loggerProvider: _logs);
 
-        var consumer = ActivatorUtilities.CreateInstance<StockPriceConsumer>(services);
-        _consumers.Add((services, consumer));
+        await _workers.StartAsync<StockPriceConsumer>(services);
 
-        await consumer.StartAsync(CancellationToken.None);
-
-        var expectedConsumers = _consumers.Count;
+        var expectedConsumers = _workers.Count;
 
         await Eventually.TrueAsync(
-            async () => await ConsumerCountAsync(MainQueue) >= expectedConsumers,
+            async () => await _broker.ConsumerCountAsync(MainQueue) >= expectedConsumers,
             MessagingTimeout,
             $"{expectedConsumers} consumer(s) to subscribe to {MainQueue}");
-    }
-
-    private async Task StopConsumersAsync()
-    {
-        foreach (var (services, consumer) in _consumers)
-        {
-            await consumer.StopAsync(CancellationToken.None);
-            consumer.Dispose();
-            await services.DisposeAsync();
-        }
-
-        _consumers.Clear();
     }
 
     private Task WaitUntilProcessedAsync(Guid messageId) =>
@@ -339,59 +309,4 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         Price = price,
         Timestamp = DateTimeOffset.UtcNow
     };
-
-    private static byte[] Serialize(StockPriceUpdatedMessage message) =>
-        Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-
-    private Task PublishAsync(StockPriceUpdatedMessage message) =>
-        PublishAsync(Serialize(message));
-
-    private async Task PublishAsync(byte[] body)
-    {
-        await using var channel = await _connection.CreateChannelAsync();
-
-        await channel.BasicPublishAsync(
-            exchange: string.Empty,
-            routingKey: MainQueue,
-            mandatory: false,
-            basicProperties: new BasicProperties { Persistent = true },
-            body: body);
-    }
-
-    private async Task<uint> MessageCountAsync(string queue) =>
-        (await DeclarePassiveAsync(queue))?.MessageCount ?? 0;
-
-    private async Task<uint> ConsumerCountAsync(string queue) =>
-        (await DeclarePassiveAsync(queue))?.ConsumerCount ?? 0;
-
-    private async Task<QueueDeclareOk?> DeclarePassiveAsync(string queue)
-    {
-        // A passive declare of a missing queue closes the channel, so use a throwaway one.
-        await using var channel = await _connection.CreateChannelAsync();
-
-        try
-        {
-            return await channel.QueueDeclarePassiveAsync(queue);
-        }
-        catch (OperationInterruptedException)
-        {
-            return null;
-        }
-    }
-
-    private async Task DeleteTopologyAsync()
-    {
-        // The consumer hardcodes these names, so each test starts from a clean broker.
-        foreach (var queue in new[] { MainQueue, RetryQueue, DeadLetterQueue })
-        {
-            await using var channel = await _connection.CreateChannelAsync();
-            await channel.QueueDeleteAsync(queue);
-        }
-
-        foreach (var exchange in new[] { RetryExchange, DeadLetterExchange })
-        {
-            await using var channel = await _connection.CreateChannelAsync();
-            await channel.ExchangeDeleteAsync(exchange);
-        }
-    }
 }

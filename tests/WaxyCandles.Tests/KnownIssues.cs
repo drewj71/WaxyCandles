@@ -13,4 +13,8 @@ public static class KnownIssues
     public const string MalformedPayloadIsNeverAcked =
         "Known bug: StockPriceConsumer deserializes outside its try/catch, so invalid " +
         "JSON throws before ack/retry and the message is left unacked indefinitely.";
+
+    public const string OutboxPublishesNonPersistentMessages =
+        "Known bug: OutboxPublisherWorker publishes without Persistent = true, then marks " +
+        "the row processed, so a RabbitMQ restart silently loses those messages.";
 }
