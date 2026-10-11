@@ -26,4 +26,14 @@ public static class KnownIssues
     public const string ConfirmPasswordIsIgnored =
         "Known bug: RegisterRequest.ConfirmPassword is never checked, so registration " +
         "succeeds when it doesn't match Password.";
+
+    public const string UnknownSymbolQuoteThrows =
+        "Known bug: Alpha Vantage answers an unknown symbol with an empty \"Global Quote\", " +
+        "and the provider throws KeyNotFoundException instead of returning null. " +
+        "MarketDataService only skips null quotes, so one bad watchlist symbol fails " +
+        "every polling cycle for all users.";
+
+    public const string DailyCandlesSwallowProviderErrors =
+        "Known bug: daily candle import returns an empty list on a rate-limit/error " +
+        "response (intraday throws), so the API reports a successful import of nothing.";
 }
