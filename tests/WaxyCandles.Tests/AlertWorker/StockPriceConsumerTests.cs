@@ -127,8 +127,12 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         await WaitUntilProcessedAsync(message.MessageId);
 
+        // The failure happens after the ProcessedMessage claim is inserted, so this
+        // also proves the rollback releases the claim: otherwise the retry would be
+        // skipped as a duplicate and the alert never evaluated.
         Assert.Equal(2, _probe.Calls.Count);
         Assert.True(_logs.Contains($"Message {message.MessageId} scheduled for retry 1"));
+        Assert.False(_logs.Contains($"Message {message.MessageId} has already been processed"));
 
         await using var db = NewDbContext();
         Assert.True((await db.Alerts.SingleAsync(a => a.Id == alertId)).IsTriggered);
@@ -168,34 +172,54 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         Assert.NotNull(deadLettered);
         Assert.Equal(body, deadLettered.Body.ToArray());
+        Assert.True(deadLettered.BasicProperties.Persistent);
         Assert.Equal(0u, await _broker.MessageCountAsync(RetryQueue));
     }
 
-    [Fact]
-    public async Task Null_payload_is_acked_and_dropped()
+    public static TheoryData<string> UnreadablePayloads =>
+    [
+        "null",
+        "{ this is not json",
+        "{}",
+        """{ "MessageId": "00000000-0000-0000-0000-000000000000", "Symbol": "AAPL", "Price": 1 }""",
+        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e01", "Symbol": " ", "Price": 1 }"""
+    ];
+
+    [Theory]
+    [MemberData(nameof(UnreadablePayloads))]
+    public async Task Unreadable_payload_is_dead_lettered_without_retrying(string payload)
     {
         await StartConsumerAsync();
 
-        await _broker.PublishAsync(Encoding.UTF8.GetBytes("null"));
+        var body = Encoding.UTF8.GetBytes(payload);
+        await _broker.PublishAsync(body);
 
-        await Eventually.TrueAsync(
-            () => _logs.Contains("Received invalid stock price message."),
-            MessagingTimeout,
-            "consumer to reject the null payload");
+        // A valid message published afterwards proves the consumer is still running.
+        var valid = NewMessage("AAPL", 150m);
+        await _broker.PublishAsync(valid);
+        await WaitUntilProcessedAsync(valid.MessageId);
 
+        // Closing the channel requeues anything still unacked.
         await _workers.StopAllAsync();
 
         Assert.Equal(0u, await _broker.MessageCountAsync(MainQueue));
-        Assert.Equal(0u, await _broker.MessageCountAsync(DeadLetterQueue));
-        Assert.Empty(_probe.Calls);
+        Assert.Equal(0u, await _broker.MessageCountAsync(RetryQueue));
+
+        var deadLettered = await _broker.GetAsync(DeadLetterQueue);
+
+        Assert.NotNull(deadLettered);
+        Assert.Equal(body, deadLettered.Body.ToArray());
+        Assert.True(deadLettered.BasicProperties.Persistent);
+        Assert.Equal(["AAPL"], _probe.Calls);
     }
 
-    [Fact(Skip = KnownIssues.ProcessedMessageCheckIsNotAtomic)]
+    [Fact]
     public async Task Concurrent_duplicate_deliveries_are_evaluated_only_once()
     {
         // Hold each evaluation open until a second one arrives (or 5s passes).
-        // With a check-then-insert dedup, both deliveries pass the
-        // "already processed?" check before either records the message.
+        // With a check-then-insert dedup, both deliveries would pass the
+        // "already processed?" check before either records the message. With the
+        // claim, the second delivery blocks on the insert and never evaluates.
         var secondArrived = new TaskCompletionSource();
         _probe.BeforeEvaluate = async attempt =>
         {
@@ -216,33 +240,14 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         await _broker.PublishAsync(message);
 
         await WaitUntilProcessedAsync(message.MessageId);
-
-        // Let any losing delivery go through the retry queue (5s TTL) and settle.
-        await Task.Delay(TimeSpan.FromSeconds(8));
+        await WaitForSkipAsync(message.MessageId);
 
         Assert.Single(_probe.Calls);
+        Assert.False(_logs.Contains($"Message {message.MessageId} scheduled for retry"));
 
         await using var db = NewDbContext();
         Assert.Equal(1, await db.ProcessedMessages.CountAsync(m => m.Id == message.MessageId));
         Assert.Equal(0u, await _broker.MessageCountAsync(DeadLetterQueue));
-    }
-
-    [Fact(Skip = KnownIssues.MalformedPayloadIsNeverAcked)]
-    public async Task Malformed_json_payload_is_not_left_unacknowledged()
-    {
-        await StartConsumerAsync();
-
-        await _broker.PublishAsync(Encoding.UTF8.GetBytes("{ this is not json"));
-
-        // A valid message published afterwards proves the consumer is still running.
-        var valid = NewMessage("AAPL", 150m);
-        await _broker.PublishAsync(valid);
-        await WaitUntilProcessedAsync(valid.MessageId);
-
-        // Closing the channel requeues anything still unacked.
-        await _workers.StopAllAsync();
-
-        Assert.Equal(0u, await _broker.MessageCountAsync(MainQueue));
     }
 
     private async Task StartConsumerAsync()

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using WaxyCandles.Api.Middleware;
+using WaxyCandles.Application.Authentication.Exceptions;
 
 namespace WaxyCandles.Tests.Api;
 
@@ -26,6 +27,29 @@ public class ExceptionHandlingMiddlewareTests
         var body = await ReadBodyAsync(context);
         Assert.Equal("An unexpected error occurred.", body.GetProperty("message").GetString());
         Assert.DoesNotContain("Sensitive detail", body.GetRawText());
+    }
+
+    public static TheoryData<Exception, int> ClientErrors => new()
+    {
+        { new InvalidCredentialsException(), StatusCodes.Status401Unauthorized },
+        { new InvalidRefreshTokenException("Refresh token expired or revoked."), StatusCodes.Status401Unauthorized },
+        { new UserAlreadyExistsException(), StatusCodes.Status409Conflict },
+        { new RegistrationFailedException("Passwords do not match."), StatusCodes.Status400BadRequest },
+    };
+
+    [Theory]
+    [MemberData(nameof(ClientErrors))]
+    public async Task Auth_exceptions_map_to_client_errors_with_their_message(
+        Exception exception,
+        int expectedStatus)
+    {
+        var context = await InvokeAsync(_ => throw exception);
+
+        Assert.Equal(expectedStatus, context.Response.StatusCode);
+        Assert.Equal("application/json", context.Response.ContentType);
+
+        var body = await ReadBodyAsync(context);
+        Assert.Equal(exception.Message, body.GetProperty("message").GetString());
     }
 
     [Fact]

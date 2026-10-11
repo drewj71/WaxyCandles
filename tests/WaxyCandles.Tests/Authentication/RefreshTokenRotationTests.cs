@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WaxyCandles.Application.Authentication.DTOs;
+using WaxyCandles.Application.Authentication.Exceptions;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Infrastructure.Authentication;
 using WaxyCandles.Tests.Infrastructure;
@@ -65,7 +66,7 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
         var registered = await RegisterAsync("alice@example.com");
         await RefreshAsync(registered.RefreshToken);
 
-        var ex = await Assert.ThrowsAsync<Exception>(
+        var ex = await Assert.ThrowsAsync<InvalidRefreshTokenException>(
             () => RefreshAsync(registered.RefreshToken));
 
         Assert.Equal("Refresh token expired or revoked.", ex.Message);
@@ -84,7 +85,7 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
             await db.SaveChangesAsync();
         }
 
-        var ex = await Assert.ThrowsAsync<Exception>(
+        var ex = await Assert.ThrowsAsync<InvalidRefreshTokenException>(
             () => RefreshAsync(registered.RefreshToken));
 
         Assert.Equal("Refresh token expired or revoked.", ex.Message);
@@ -93,7 +94,7 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
     [Fact]
     public async Task Unknown_token_is_rejected()
     {
-        var ex = await Assert.ThrowsAsync<Exception>(
+        var ex = await Assert.ThrowsAsync<InvalidRefreshTokenException>(
             () => RefreshAsync("not-a-real-token"));
 
         Assert.Equal("Invalid refresh token.", ex.Message);
@@ -109,7 +110,7 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
 
         Assert.True((await LoadTokenAsync(registered.RefreshToken)).IsRevoked);
 
-        await Assert.ThrowsAsync<Exception>(
+        await Assert.ThrowsAsync<InvalidRefreshTokenException>(
             () => RefreshAsync(registered.RefreshToken));
     }
 
@@ -136,7 +137,7 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
 
     private Task<AuthResponse> RegisterAsync(string email) =>
         WithAuthServiceAsync(auth => auth.RegisterAsync(
-            new RegisterRequest { Email = email, Password = Password }));
+            new RegisterRequest { Email = email, Password = Password, ConfirmPassword = Password }));
 
     private Task<AuthResponse> RefreshAsync(string refreshToken) =>
         WithAuthServiceAsync(auth => auth.RefreshTokenAsync(

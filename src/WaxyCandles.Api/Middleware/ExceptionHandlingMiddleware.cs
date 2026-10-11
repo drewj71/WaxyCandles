@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using WaxyCandles.Application.Authentication.Exceptions;
 
 namespace WaxyCandles.Api.Middleware;
 
@@ -25,16 +26,41 @@ public class ExceptionHandlingMiddleware
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, ex.Message);
+            // Known client errors return their own (user-facing) message;
+            // anything else is a generic 500 that doesn't leak details.
+            var (statusCode, message) = ex switch
+            {
+                InvalidCredentialsException or InvalidRefreshTokenException =>
+                    (HttpStatusCode.Unauthorized, ex.Message),
+
+                UserAlreadyExistsException =>
+                    (HttpStatusCode.Conflict, ex.Message),
+
+                RegistrationFailedException =>
+                    (HttpStatusCode.BadRequest, ex.Message),
+
+                _ => (HttpStatusCode.InternalServerError, "An unexpected error occurred.")
+            };
+
+            if (statusCode == HttpStatusCode.InternalServerError)
+            {
+                _logger.LogError(ex, ex.Message);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Request failed with {StatusCode}: {Message}",
+                    (int)statusCode,
+                    ex.Message);
+            }
 
             context.Response.ContentType = "application/json";
-            context.Response.StatusCode =
-                (int)HttpStatusCode.InternalServerError;
+            context.Response.StatusCode = (int)statusCode;
 
 
             var response = new
             {
-                message = "An unexpected error occurred."
+                message
             };
 
 

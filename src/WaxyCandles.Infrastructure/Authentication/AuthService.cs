@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using WaxyCandles.Application.Authentication.DTOs;
+using WaxyCandles.Application.Authentication.Exceptions;
 using WaxyCandles.Infrastructure.Identity;
 using WaxyCandles.Infrastructure.Persistence;
 using WaxyCandles.Domain.Entities;
@@ -25,11 +26,16 @@ public class AuthService : IAuthService
 
     public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
     {
+        if (request.Password != request.ConfirmPassword)
+        {
+            throw new RegistrationFailedException("Passwords do not match.");
+        }
+
         var existingUser = await _userManager.FindByEmailAsync(request.Email);
 
         if (existingUser != null)
         {
-            throw new Exception("User already exists.");
+            throw new UserAlreadyExistsException();
         }
 
         var user = new ApplicationUser
@@ -48,7 +54,7 @@ public class AuthService : IAuthService
                 ", ",
                 result.Errors.Select(x => x.Description));
 
-            throw new Exception(errors);
+            throw new RegistrationFailedException(errors);
         }
 
         var accessToken = _tokenService.GenerateAccessToken(user);
@@ -81,14 +87,14 @@ public class AuthService : IAuthService
 
     public async Task<AuthResponse> LoginAsync(LoginRequest request)
     {
-        var user = await _userManager.FindByEmailAsync(request.Email) ?? throw new Exception("Invalid credentials.");
+        var user = await _userManager.FindByEmailAsync(request.Email) ?? throw new InvalidCredentialsException();
         var passwordValid = await _userManager.CheckPasswordAsync(
             user,
             request.Password);
 
         if (!passwordValid)
         {
-            throw new Exception("Invalid credentials.");
+            throw new InvalidCredentialsException();
         }
 
         var accessToken = _tokenService.GenerateAccessToken(user);
@@ -122,15 +128,15 @@ public class AuthService : IAuthService
     RefreshTokenRequest request)
     {
         var storedToken = await _dbContext.RefreshTokens
-            .FirstOrDefaultAsync(x => x.Token == request.RefreshToken) ?? throw new Exception("Invalid refresh token.");
+            .FirstOrDefaultAsync(x => x.Token == request.RefreshToken) ?? throw new InvalidRefreshTokenException("Invalid refresh token.");
 
         if (!storedToken.IsActive)
         {
-            throw new Exception("Refresh token expired or revoked.");
+            throw new InvalidRefreshTokenException("Refresh token expired or revoked.");
         }
 
         var user = await _userManager.FindByIdAsync(
-            storedToken.UserId) ?? throw new Exception("User not found.");
+            storedToken.UserId) ?? throw new InvalidRefreshTokenException("User not found.");
 
         // Rotate refresh token
         storedToken.RevokedAt = DateTime.UtcNow;

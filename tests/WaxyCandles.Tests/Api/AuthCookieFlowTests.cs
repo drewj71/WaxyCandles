@@ -238,7 +238,7 @@ public class AuthCookieFlowTests(IntegrationFixture fixture) : ApiTestBase(fixtu
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    [Fact(Skip = KnownIssues.AuthFailuresReturn500)]
+    [Fact]
     public async Task Auth_failures_are_reported_as_client_errors()
     {
         var alice = await RegisteredClientAsync("alice@example.com");
@@ -252,12 +252,35 @@ public class AuthCookieFlowTests(IntegrationFixture fixture) : ApiTestBase(fixtu
         var revokedRefresh = await NewRawClient().SendAsync(
             WithCookie(HttpMethod.Post, "/api/auth/refresh", RefreshTokenCookie, rotatedRefresh));
 
-        Assert.All(
-            new[] { wrongPassword, unknownUser, duplicate, weakPassword, revokedRefresh },
-            r => Assert.InRange((int)r.StatusCode, 400, 499));
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongPassword.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, unknownUser.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, weakPassword.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, revokedRefresh.StatusCode);
     }
 
-    [Fact(Skip = KnownIssues.ConfirmPasswordIsIgnored)]
+    [Fact]
+    public async Task Wrong_password_and_unknown_email_get_the_same_message()
+    {
+        await RegisteredClientAsync("alice@example.com");
+
+        var wrongPassword = await LoginAsync(NewClient().Http, "alice@example.com", "WrongPassword1");
+        var unknownUser = await LoginAsync(NewClient().Http, "nobody@example.com");
+
+        Assert.Equal("Invalid credentials.", await ErrorMessageAsync(wrongPassword));
+        Assert.Equal("Invalid credentials.", await ErrorMessageAsync(unknownUser));
+    }
+
+    [Fact]
+    public async Task Weak_password_reports_the_identity_policy_errors()
+    {
+        var response = await RegisterAsync(NewClient().Http, "bob@example.com", "short");
+
+        var message = await ErrorMessageAsync(response);
+        Assert.Contains("Passwords must be at least 8 characters", message);
+    }
+
+    [Fact]
     public async Task Registration_with_mismatched_confirm_password_is_rejected()
     {
         var response = await RegisterAsync(
@@ -266,9 +289,15 @@ public class AuthCookieFlowTests(IntegrationFixture fixture) : ApiTestBase(fixtu
             password: Password,
             confirmPassword: "SomethingElse1");
 
-        Assert.InRange((int)response.StatusCode, 400, 499);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("Passwords do not match.", await ErrorMessageAsync(response));
         Assert.Null(await FindUserAsync("alice@example.com"));
     }
+
+    private static async Task<string?> ErrorMessageAsync(HttpResponseMessage response) =>
+        (await response.Content.ReadFromJsonAsync<ErrorResponse>(Json))?.Message;
+
+    private sealed record ErrorResponse(string Message);
 
     private async Task<string> CreateUserAsync(string email)
     {

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -57,25 +58,17 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
                 "Global Quote",
                 out var quote))
         {
-            if (document.RootElement.TryGetProperty(
-                    "Information",
-                    out var information))
-            {
-                throw new InvalidOperationException(
-                    $"Alpha Vantage error: {information.GetString()}");
-            }
-
-            if (document.RootElement.TryGetProperty(
-                    "Note",
-                    out var note))
-            {
-                throw new InvalidOperationException(
-                    $"Alpha Vantage error: {note.GetString()}");
-            }
-
-            throw new InvalidOperationException(
+            ThrowAlphaVantageError(
+                document.RootElement,
                 $"Alpha Vantage did not return quote data for {symbol}.");
         }
+
+        // Alpha Vantage answers an unknown symbol with an empty "Global Quote".
+        if (!quote.EnumerateObject().Any())
+        {
+            return null;
+        }
+
         var price = decimal.Parse(
             quote.GetProperty("05. price").GetString()!,
             CultureInfo.InvariantCulture);
@@ -189,7 +182,9 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
                 "Time Series (Daily)",
                 out var timeSeries))
         {
-            return [];
+            ThrowAlphaVantageError(
+                document.RootElement,
+                $"Alpha Vantage did not return expected time series data for {symbol}.");
         }
 
         var candles = new List<StockCandle>();
@@ -275,23 +270,8 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
                 timeSeriesProperty,
                 out var timeSeries))
         {
-            if (document.RootElement.TryGetProperty(
-                    "Information",
-                    out var information))
-            {
-                throw new InvalidOperationException(
-                    $"Alpha Vantage error: {information.GetString()}");
-            }
-
-            if (document.RootElement.TryGetProperty(
-                    "Note",
-                    out var note))
-            {
-                throw new InvalidOperationException(
-                    $"Alpha Vantage error: {note.GetString()}");
-            }
-
-            throw new InvalidOperationException(
+            ThrowAlphaVantageError(
+                document.RootElement,
                 $"Alpha Vantage did not return expected time series data for {symbol}.");
         }
 
@@ -343,5 +323,31 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
         return candles
             .OrderBy(x => x.Timestamp)
             .ToList();
+    }
+
+    // Alpha Vantage reports rate limits and other errors with a 200 status and an
+    // "Information" or "Note" field in place of the expected data.
+    [DoesNotReturn]
+    private static void ThrowAlphaVantageError(
+        JsonElement root,
+        string fallbackMessage)
+    {
+        if (root.TryGetProperty(
+                "Information",
+                out var information))
+        {
+            throw new InvalidOperationException(
+                $"Alpha Vantage error: {information.GetString()}");
+        }
+
+        if (root.TryGetProperty(
+                "Note",
+                out var note))
+        {
+            throw new InvalidOperationException(
+                $"Alpha Vantage error: {note.GetString()}");
+        }
+
+        throw new InvalidOperationException(fallbackMessage);
     }
 }

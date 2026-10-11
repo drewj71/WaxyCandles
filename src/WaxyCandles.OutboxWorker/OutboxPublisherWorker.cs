@@ -25,8 +25,10 @@ public class OutboxPublisherWorker : BackgroundService
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
+        // Publisher confirms: a row is only marked processed once RabbitMQ has
+        // accepted (and, being persistent on a durable queue, stored) the message.
         await using var channel =
-            await _rabbitMqConnection.CreateChannelAsync(
+            await _rabbitMqConnection.CreateConfirmedChannelAsync(
                 stoppingToken);
 
         await channel.QueueDeclareAsync(
@@ -62,28 +64,48 @@ public class OutboxPublisherWorker : BackgroundService
                         .Take(20)
                         .ToListAsync(stoppingToken);
 
-                foreach (var message in messages)
+                try
                 {
-                    var body =
-                        Encoding.UTF8.GetBytes(
-                            message.Payload);
+                    foreach (var message in messages)
+                    {
+                        var body =
+                            Encoding.UTF8.GetBytes(
+                                message.Payload);
 
-                    await channel.BasicPublishAsync(
-                        exchange: string.Empty,
-                        routingKey: "stock-price-updated",
-                        body: body,
-                        cancellationToken: stoppingToken);
+                        var properties =
+                            new BasicProperties
+                            {
+                                Persistent = true,
+                                MessageId = message.Id.ToString(),
+                                Type = message.Type,
+                                ContentType = "application/json"
+                            };
 
-                    message.ProcessedAt =
-                        DateTimeOffset.UtcNow;
+                        // mandatory: an unroutable message (e.g. the queue was
+                        // deleted) fails the publish instead of being dropped.
+                        await channel.BasicPublishAsync(
+                            exchange: string.Empty,
+                            routingKey: "stock-price-updated",
+                            mandatory: true,
+                            basicProperties: properties,
+                            body: body,
+                            cancellationToken: stoppingToken);
 
-                    _logger.LogInformation(
-                        "Published outbox message {MessageId}",
-                        message.Id);
+                        message.ProcessedAt =
+                            DateTimeOffset.UtcNow;
+
+                        _logger.LogInformation(
+                            "Published outbox message {MessageId}",
+                            message.Id);
+                    }
                 }
-
-                await dbContext.SaveChangesAsync(
-                    stoppingToken);
+                finally
+                {
+                    // Save whatever was confirmed, even if a later publish in the
+                    // batch failed, so those messages aren't sent again next poll.
+                    await dbContext.SaveChangesAsync(
+                        CancellationToken.None);
+                }
             }
             catch (OperationCanceledException)
                 when (stoppingToken.IsCancellationRequested)

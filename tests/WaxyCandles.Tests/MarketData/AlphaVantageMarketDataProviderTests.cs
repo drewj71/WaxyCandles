@@ -120,7 +120,7 @@ public class AlphaVantageMarketDataProviderTests
             () => Provider().GetCurrentQuoteAsync("AAPL"));
     }
 
-    [Fact(Skip = KnownIssues.UnknownSymbolQuoteThrows)]
+    [Fact]
     public async Task Unknown_symbol_returns_no_quote()
     {
         // What Alpha Vantage actually returns for a symbol it doesn't know.
@@ -218,7 +218,7 @@ public class AlphaVantageMarketDataProviderTests
         Assert.Equal($"Alpha Vantage error: {RateLimitNote}", ex.Message);
     }
 
-    [Fact(Skip = KnownIssues.DailyCandlesSwallowProviderErrors)]
+    [Fact]
     public async Task Daily_rate_limit_response_throws_like_intraday_does()
     {
         _handler.RespondWith($$"""{ "Note": "{{RateLimitNote}}" }""");

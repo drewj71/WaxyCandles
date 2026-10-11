@@ -30,8 +30,10 @@ public class StockPriceConsumer : BackgroundService
     protected override async Task ExecuteAsync(
     CancellationToken stoppingToken)
     {
+        // Confirms make every retry/dead-letter publish wait for the broker,
+        // so the original delivery is only acked once its replacement is safe.
         await using var channel =
-            await _rabbitMqConnection.CreateChannelAsync(
+            await _rabbitMqConnection.CreateConfirmedChannelAsync(
                 stoppingToken);
 
         await channel.ExchangeDeclareAsync(
@@ -101,16 +103,19 @@ public class StockPriceConsumer : BackgroundService
         {
             var body = eventArgs.Body.ToArray();
 
-            var json = Encoding.UTF8.GetString(body);
-
-            var message =
-                JsonSerializer.Deserialize<StockPriceUpdatedMessage>(
-                    json);
+            var message = TryDeserialize(body);
 
             if (message is null)
             {
+                // A message we can't read will never succeed, so retrying it is
+                // pointless. Park it in the dead-letter queue for inspection.
                 _logger.LogWarning(
-                    "Received invalid stock price message.");
+                    "Received invalid stock price message. Sending to dead-letter queue.");
+
+                await PublishToDeadLetterAsync(
+                    channel,
+                    body,
+                    stoppingToken);
 
                 await channel.BasicAckAsync(
                     eventArgs.DeliveryTag,
@@ -134,10 +139,14 @@ public class StockPriceConsumer : BackgroundService
                     scope.ServiceProvider
                         .GetRequiredService<AppDbContext>();
 
+                // Resolved from the same scope, so it shares dbContext and
+                // therefore the transaction below.
                 var alertEvaluationService =
                     scope.ServiceProvider
                         .GetRequiredService<IAlertEvaluationService>();
 
+                // Fast path for ordinary redeliveries. Not a guarantee on its own:
+                // the claim below is what ensures a message is evaluated only once.
                 var alreadyProcessed =
                     await dbContext.ProcessedMessages
                         .AnyAsync(
@@ -146,13 +155,41 @@ public class StockPriceConsumer : BackgroundService
 
                 if (alreadyProcessed)
                 {
-                    _logger.LogInformation(
-                        "Message {MessageId} has already been processed. Skipping.",
+                    await AckAlreadyProcessedAsync(
+                        channel,
+                        eventArgs.DeliveryTag,
                         message.MessageId);
 
-                    await channel.BasicAckAsync(
+                    return;
+                }
+
+                await using var transaction =
+                    await dbContext.Database.BeginTransactionAsync(
+                        stoppingToken);
+
+                // Claim the message before evaluating. The primary key makes the
+                // claim atomic: a concurrent delivery of the same message blocks on
+                // this insert until we commit, then fails with a duplicate key.
+                // If evaluation fails, the rollback releases the claim for a retry.
+                dbContext.ProcessedMessages.Add(
+                    new ProcessedMessage
+                    {
+                        Id = message.MessageId,
+                        ProcessedAt = DateTimeOffset.UtcNow
+                    });
+
+                try
+                {
+                    await dbContext.SaveChangesAsync(
+                        stoppingToken);
+                }
+                catch (DbUpdateException ex)
+                    when (ex.IsUniqueConstraintViolation())
+                {
+                    await AckAlreadyProcessedAsync(
+                        channel,
                         eventArgs.DeliveryTag,
-                        multiple: false);
+                        message.MessageId);
 
                     return;
                 }
@@ -162,14 +199,7 @@ public class StockPriceConsumer : BackgroundService
                     message.Price,
                     stoppingToken);
 
-                dbContext.ProcessedMessages.Add(
-                    new ProcessedMessage
-                    {
-                        Id = message.MessageId,
-                        ProcessedAt = DateTimeOffset.UtcNow
-                    });
-
-                await dbContext.SaveChangesAsync(
+                await transaction.CommitAsync(
                     stoppingToken);
 
                 await channel.BasicAckAsync(
@@ -194,11 +224,10 @@ public class StockPriceConsumer : BackgroundService
                         "Message {MessageId} has reached the maximum retry count. Sending to dead-letter queue.",
                         message.MessageId);
 
-                    await channel.BasicPublishAsync(
-                        exchange: "stock-price-dlx",
-                        routingKey: "dead-letter",
-                        body: eventArgs.Body.ToArray(),
-                        cancellationToken: stoppingToken);
+                    await PublishToDeadLetterAsync(
+                        channel,
+                        body,
+                        stoppingToken);
 
                     await channel.BasicAckAsync(
                         eventArgs.DeliveryTag,
@@ -226,7 +255,7 @@ public class StockPriceConsumer : BackgroundService
                     routingKey: "retry",
                     mandatory: false,
                     basicProperties: properties,
-                    body: eventArgs.Body.ToArray(),
+                    body: body,
                     cancellationToken: stoppingToken);
 
                 await channel.BasicAckAsync(
@@ -251,6 +280,63 @@ public class StockPriceConsumer : BackgroundService
         await Task.Delay(
             Timeout.Infinite,
             stoppingToken);
+    }
+
+    private async Task AckAlreadyProcessedAsync(
+        IChannel channel,
+        ulong deliveryTag,
+        Guid messageId)
+    {
+        _logger.LogInformation(
+            "Message {MessageId} has already been processed. Skipping.",
+            messageId);
+
+        await channel.BasicAckAsync(
+            deliveryTag,
+            multiple: false);
+    }
+
+    private StockPriceUpdatedMessage? TryDeserialize(byte[] body)
+    {
+        StockPriceUpdatedMessage? message;
+
+        try
+        {
+            message =
+                JsonSerializer.Deserialize<StockPriceUpdatedMessage>(
+                    body);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Stock price message is not valid JSON.");
+
+            return null;
+        }
+
+        if (message is null ||
+            message.MessageId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(message.Symbol))
+        {
+            return null;
+        }
+
+        return message;
+    }
+
+    private static async Task PublishToDeadLetterAsync(
+        IChannel channel,
+        byte[] body,
+        CancellationToken cancellationToken)
+    {
+        await channel.BasicPublishAsync(
+            exchange: "stock-price-dlx",
+            routingKey: "dead-letter",
+            mandatory: false,
+            basicProperties: new BasicProperties { Persistent = true },
+            body: body,
+            cancellationToken: cancellationToken);
     }
 
     internal static int GetRetryCount(

@@ -36,6 +36,22 @@ public class RabbitMqConnection : IAsyncDisposable
             cancellationToken: cancellationToken);
     }
 
+    /// <summary>
+    /// A channel with publisher confirms: BasicPublishAsync only completes once the
+    /// broker has accepted the message, and throws if it is nacked or (when
+    /// mandatory) unroutable. Use it wherever a publish is followed by marking
+    /// something done (an outbox row, an ack of the original delivery).
+    /// </summary>
+    public async Task<IChannel> CreateConfirmedChannelAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await _connection.CreateChannelAsync(
+            new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true),
+            cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _connection.DisposeAsync();

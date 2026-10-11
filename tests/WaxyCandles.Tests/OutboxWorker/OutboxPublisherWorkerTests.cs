@@ -20,6 +20,7 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
     private static readonly DateTimeOffset T0 = new(2026, 9, 1, 14, 30, 0, TimeSpan.Zero);
 
     private readonly RunningWorkers _workers = new();
+    private readonly CapturingLoggerProvider _logs = new();
     private RabbitMqTestBroker _broker = default!;
 
     public override async Task InitializeAsync()
@@ -103,10 +104,10 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
         Assert.Equal([late.Payload], await DrainPayloadsAsync());
     }
 
-    [Fact(Skip = KnownIssues.OutboxPublishesNonPersistentMessages)]
-    public async Task Published_messages_survive_a_broker_restart()
+    [Fact]
+    public async Task Published_messages_are_persistent_and_carry_the_outbox_id()
     {
-        await SeedOutboxAsync(T0, "AAPL");
+        var entry = await SeedOutboxAsync(T0, "AAPL");
 
         await StartWorkerAsync();
         await WaitUntilAllProcessedAsync();
@@ -118,11 +119,39 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
             delivered.BasicProperties.Persistent,
             "Outbox messages are marked processed once published, so they must be " +
             "persistent or a RabbitMQ restart loses them.");
+        Assert.Equal(entry.Id.ToString(), delivered.BasicProperties.MessageId);
+        Assert.Equal(nameof(StockPriceUpdatedMessage), delivered.BasicProperties.Type);
+        Assert.Equal("application/json", delivered.BasicProperties.ContentType);
+    }
+
+    [Fact]
+    public async Task Message_the_broker_cannot_route_is_not_marked_processed()
+    {
+        // With publisher confirms + mandatory, a publish that RabbitMQ can't deliver
+        // fails, so the row stays pending instead of being marked processed and lost.
+        await StartWorkerAsync();
+
+        await Eventually.TrueAsync(
+            async () => await _broker.MessageCountAsync(MainQueue) == 0
+                && _logs.Contains("Outbox publisher started."),
+            PublishTimeout,
+            "worker to declare its queue");
+
+        await _broker.DeleteTopologyAsync();
+        await SeedOutboxAsync(DateTimeOffset.UtcNow, "AAPL");
+
+        await Eventually.TrueAsync(
+            () => _logs.Contains("Error while publishing outbox messages."),
+            PublishTimeout,
+            "publish to the deleted queue to fail");
+
+        await using var db = NewDbContext();
+        Assert.Null((await db.OutboxMessages.SingleAsync()).ProcessedAt);
     }
 
     private async Task StartWorkerAsync() =>
         await _workers.StartAsync<OutboxPublisherWorker>(
-            Fixture.BuildServices(ConnectionString));
+            Fixture.BuildServices(ConnectionString, loggerProvider: _logs));
 
     private Task WaitUntilAllProcessedAsync() =>
         Eventually.TrueAsync(
