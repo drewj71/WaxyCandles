@@ -63,8 +63,23 @@ public sealed class RabbitMqTestBroker : IAsyncDisposable
     public async Task<uint> MessageCountAsync(string queue) =>
         (await DeclarePassiveAsync(queue))?.MessageCount ?? 0;
 
+    public async Task<bool> QueueExistsAsync(string queue) =>
+        await DeclarePassiveAsync(queue) is not null;
+
     public async Task<uint> ConsumerCountAsync(string queue) =>
         (await DeclarePassiveAsync(queue))?.ConsumerCount ?? 0;
+
+    public async Task DeleteQueueAsync(string queue)
+    {
+        await using var channel = await _connection.CreateChannelAsync();
+        await channel.QueueDeleteAsync(queue);
+    }
+
+    public async Task DeleteExchangeAsync(string exchange)
+    {
+        await using var channel = await _connection.CreateChannelAsync();
+        await channel.ExchangeDeleteAsync(exchange);
+    }
 
     /// <summary>
     /// Deletes every queue and exchange the workers declare, so each test starts clean.

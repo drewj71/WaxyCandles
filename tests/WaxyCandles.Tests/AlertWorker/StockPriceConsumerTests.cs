@@ -182,7 +182,10 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         "{ this is not json",
         "{}",
         """{ "MessageId": "00000000-0000-0000-0000-000000000000", "Symbol": "AAPL", "Price": 1 }""",
-        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e01", "Symbol": " ", "Price": 1 }"""
+        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e01", "Symbol": " ", "Price": 1 }""",
+        // A missing or zero price would otherwise trigger every "Below" alert.
+        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e02", "Symbol": "AAPL" }""",
+        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e03", "Symbol": "AAPL", "Price": 0 }"""
     ];
 
     [Theory]
@@ -211,6 +214,135 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         Assert.Equal(body, deadLettered.Body.ToArray());
         Assert.True(deadLettered.BasicProperties.Persistent);
         Assert.Equal(["AAPL"], _probe.Calls);
+    }
+
+    [Fact]
+    public async Task Failing_message_is_requeued_not_lost_when_the_retry_queue_is_missing()
+    {
+        // With the retry queue gone the retry publish is unroutable. Before, the
+        // broker confirmed it anyway and the original was acked: message lost.
+        _probe.BeforeEvaluate = attempt => attempt == 1
+            ? throw new InvalidOperationException("Simulated transient failure")
+            : Task.CompletedTask;
+
+        await StartConsumerAsync();
+        await _broker.DeleteQueueAsync(RetryQueue);
+
+        var message = NewMessage("AAPL", 150m);
+        await _broker.PublishAsync(message);
+
+        await WaitForRequeueAsync();
+
+        // Requeued: the next delivery succeeds (the probe only fails once).
+        await WaitUntilProcessedAsync(message.MessageId);
+        Assert.Equal(2, _probe.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Unreadable_message_is_requeued_not_lost_when_the_dead_letter_queue_is_missing()
+    {
+        await StartConsumerAsync();
+        await _broker.DeleteQueueAsync(DeadLetterQueue);
+
+        await _broker.PublishAsync(Encoding.UTF8.GetBytes("null"));
+
+        await WaitForRequeueAsync();
+
+        // The consumer redeclares the missing queue before requeueing, so the
+        // redelivery lands in the dead-letter queue instead of having been dropped.
+        await Eventually.TrueAsync(
+            async () => await _broker.MessageCountAsync(DeadLetterQueue) == 1,
+            MessagingTimeout,
+            "requeued message to be dead-lettered once the queue is redeclared");
+    }
+
+    [Fact]
+    public async Task Connection_drop_is_left_to_automatic_recovery_with_a_single_consumer()
+    {
+        await StartConsumerAsync();
+
+        await Fixture.CloseAllRabbitMqConnectionsAsync();
+
+        // The test's own connection is recovering too, so tolerate failures.
+        await Eventually.TrueAsync(
+            async () => await TryGetAsync(() => _broker.ConsumerCountAsync(MainQueue)) == 1,
+            MessagingTimeout,
+            "automatic recovery to re-register the consumer");
+
+        // Long enough for an (unwanted) rebuild by the reconnect loop to subscribe
+        // a second consumer next to the recovered one.
+        await Task.Delay(TimeSpan.FromSeconds(8));
+
+        Assert.Equal(1u, await _broker.ConsumerCountAsync(MainQueue));
+        Assert.False(_logs.Contains("Reconnecting"));
+        Assert.True(_logs.Contains("RabbitMQ connection lost"));
+
+        var message = NewMessage("AAPL", 150m);
+        await _broker.PublishAsync(message);
+        await WaitUntilProcessedAsync(message.MessageId);
+    }
+
+    private static async Task<uint?> TryGetAsync(Func<Task<uint>> probe)
+    {
+        try
+        {
+            return await probe();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    [Fact]
+    public async Task Consumer_recovers_after_the_broker_closes_its_channel()
+    {
+        await StartConsumerAsync();
+
+        // Publishing to a missing exchange is a channel-level error (404), so the
+        // broker closes the consumer's channel while it dead-letters this message.
+        await _broker.DeleteExchangeAsync(DeadLetterExchange);
+        await _broker.PublishAsync(Encoding.UTF8.GetBytes("null"));
+
+        await Eventually.TrueAsync(
+            () => _logs.Contains("RabbitMQ channel closed"),
+            MessagingTimeout,
+            "broker to close the consumer's channel");
+
+        // The reconnect loop reopens the channel and redeclares the exchange; the
+        // unacked message is redelivered and dead-lettered.
+        await Eventually.TrueAsync(
+            async () => await _broker.MessageCountAsync(DeadLetterQueue) == 1,
+            MessagingTimeout,
+            "message to be dead-lettered after the consumer reconnects");
+
+        var valid = NewMessage("AAPL", 150m);
+        await _broker.PublishAsync(valid);
+        await WaitUntilProcessedAsync(valid.MessageId);
+    }
+
+    [Fact]
+    public async Task Consumer_resubscribes_after_its_queue_is_deleted()
+    {
+        await StartConsumerAsync();
+
+        // Deleting the queue makes the broker cancel the subscription without
+        // closing the channel.
+        await _broker.DeleteQueueAsync(MainQueue);
+
+        await Eventually.TrueAsync(
+            () => _logs.Contains("was cancelled by the broker"),
+            MessagingTimeout,
+            "broker to cancel the subscription");
+
+        await Eventually.TrueAsync(
+            async () => await _broker.ConsumerCountAsync(MainQueue) >= 1,
+            MessagingTimeout,
+            "consumer to redeclare the queue and resubscribe");
+
+        var message = NewMessage("AAPL", 150m);
+        await _broker.PublishAsync(message);
+        await WaitUntilProcessedAsync(message.MessageId);
     }
 
     [Fact]
@@ -279,6 +411,12 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
             },
             MessagingTimeout,
             $"message {messageId} to be recorded as processed");
+
+    private Task WaitForRequeueAsync() =>
+        Eventually.TrueAsync(
+            () => _logs.Contains("Could not ack, retry or dead-letter delivery"),
+            MessagingTimeout,
+            "consumer to fail the unroutable publish and requeue the delivery");
 
     private Task WaitForSkipAsync(Guid messageId) =>
         Eventually.TrueAsync(

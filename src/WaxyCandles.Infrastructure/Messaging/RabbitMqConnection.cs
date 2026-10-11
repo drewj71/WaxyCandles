@@ -29,6 +29,12 @@ public class RabbitMqConnection : IAsyncDisposable
             .GetResult();
     }
 
+    /// <summary>
+    /// False while the connection is down. Channels on it are then restored by
+    /// the client's automatic recovery, so callers shouldn't rebuild them.
+    /// </summary>
+    public bool IsOpen => _connection.IsOpen;
+
     public async Task<IChannel> CreateChannelAsync(
         CancellationToken cancellationToken = default)
     {

@@ -125,30 +125,55 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
     }
 
     [Fact]
-    public async Task Message_the_broker_cannot_route_is_not_marked_processed()
+    public async Task Unroutable_message_stays_pending_until_the_queue_is_redeclared()
     {
-        // With publisher confirms + mandatory, a publish that RabbitMQ can't deliver
-        // fails, so the row stays pending instead of being marked processed and lost.
+        // With publisher confirms + mandatory, a publish that RabbitMQ can't route
+        // fails, so the row stays pending instead of being marked processed and
+        // lost. The worker then redeclares the queue and sends it on a later poll.
         await StartWorkerAsync();
 
         await Eventually.TrueAsync(
-            async () => await _broker.MessageCountAsync(MainQueue) == 0
-                && _logs.Contains("Outbox publisher started."),
+            () => _broker.QueueExistsAsync(MainQueue),
             PublishTimeout,
             "worker to declare its queue");
 
-        await _broker.DeleteTopologyAsync();
-        await SeedOutboxAsync(DateTimeOffset.UtcNow, "AAPL");
+        await _broker.DeleteQueueAsync(MainQueue);
+        var entry = await SeedOutboxAsync(DateTimeOffset.UtcNow, "AAPL");
 
         await Eventually.TrueAsync(
             () => _logs.Contains("Error while publishing outbox messages."),
             PublishTimeout,
             "publish to the deleted queue to fail");
 
-        await using var db = NewDbContext();
-        Assert.Null((await db.OutboxMessages.SingleAsync()).ProcessedAt);
+        // The next poll is 5s away, so the failed attempt is observable here.
+        await using (var db = NewDbContext())
+        {
+            Assert.Null((await db.OutboxMessages.SingleAsync()).ProcessedAt);
+        }
+
+        await WaitUntilAllProcessedAsync();
+        Assert.Equal([entry.Payload], await DrainPayloadsAsync());
     }
 
+    [Fact]
+    public async Task Backlog_drains_without_waiting_between_full_batches()
+    {
+        // 45 messages = two full batches and a partial one. Without draining,
+        // the worker would wait the 5s poll interval after each batch.
+        for (var i = 0; i < 45; i++)
+        {
+            await SeedOutboxAsync(T0.AddSeconds(i), $"SYM{i:00}");
+        }
+
+        var started = DateTime.UtcNow;
+        await StartWorkerAsync();
+        await WaitUntilAllProcessedAsync();
+
+        Assert.True(
+            DateTime.UtcNow - started < TimeSpan.FromSeconds(4.5),
+            "A backlog of full batches should not wait a poll interval between them.");
+        Assert.Equal(45, (await DrainPayloadsAsync()).Count);
+    }
     private async Task StartWorkerAsync() =>
         await _workers.StartAsync<OutboxPublisherWorker>(
             Fixture.BuildServices(ConnectionString, loggerProvider: _logs));

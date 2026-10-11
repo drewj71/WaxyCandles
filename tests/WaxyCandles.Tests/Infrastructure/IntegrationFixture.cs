@@ -36,6 +36,19 @@ public sealed class IntegrationFixture : IAsyncLifetime
 
     public int RabbitMqPort => _rabbitMq.GetMappedPublicPort(5672);
 
+    /// <summary>Drops every client connection, as a broker restart or network blip would.</summary>
+    public async Task CloseAllRabbitMqConnectionsAsync()
+    {
+        var result = await _rabbitMq.ExecAsync(
+            ["rabbitmqctl", "close_all_connections", "Closed by test"]);
+
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"rabbitmqctl close_all_connections failed: {result.Stderr}");
+        }
+    }
+
     public Task InitializeAsync() =>
         Task.WhenAll(_sqlServer.StartAsync(), _rabbitMq.StartAsync());
 
