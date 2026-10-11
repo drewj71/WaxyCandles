@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="WaxyCandles.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\WaxyCandles.Application\WaxyCandles.Application.csproj" />
     <ProjectReference Include="..\WaxyCandles.Infrastructure\WaxyCandles.Infrastructure.csproj" />
   </ItemGroup>

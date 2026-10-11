@@ -13,9 +13,14 @@ public class RabbitMqConnection : IAsyncDisposable
             configuration["RabbitMQ:Host"]
             ?? "localhost";
 
+        var port =
+            configuration.GetValue<int?>("RabbitMQ:Port")
+            ?? AmqpTcpEndpoint.UseDefaultPort;
+
         var factory = new ConnectionFactory
         {
-            HostName = host
+            HostName = host,
+            Port = port
         };
 
         _connection = factory

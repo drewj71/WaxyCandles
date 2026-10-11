@@ -253,7 +253,7 @@ public class StockPriceConsumer : BackgroundService
             stoppingToken);
     }
 
-    private static int GetRetryCount(
+    internal static int GetRetryCount(
         IReadOnlyBasicProperties? properties)
     {
         if (properties?.Headers is null)
