@@ -16,8 +16,12 @@ namespace WaxyCandles.Tests.Infrastructure;
 public sealed class IntegrationFixture : IAsyncLifetime
 {
     // Test-only signing key. Not a real secret; never used outside this test run.
-    private const string TestJwtSecret =
+    public const string TestJwtSecret =
         "waxycandles-tests-only-signing-key-0123456789abcdef";
+
+    public const string TestJwtIssuer = "WaxyCandles.Tests";
+
+    public const string TestJwtAudience = "WaxyCandles.Tests";
 
     private readonly MsSqlContainer _sqlServer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest")
         .Build();
@@ -66,6 +70,20 @@ public sealed class IntegrationFixture : IAsyncLifetime
             .Options);
 
     /// <summary>
+    /// The configuration every app component under test gets: the test database,
+    /// the test-only JWT settings and the RabbitMQ container.
+    /// </summary>
+    public Dictionary<string, string?> TestSettings(string connectionString) => new()
+    {
+        ["ConnectionStrings:DefaultConnection"] = connectionString,
+        ["Jwt:Secret"] = TestJwtSecret,
+        ["Jwt:Issuer"] = TestJwtIssuer,
+        ["Jwt:Audience"] = TestJwtAudience,
+        ["RabbitMQ:Host"] = RabbitMqHost,
+        ["RabbitMQ:Port"] = RabbitMqPort.ToString()
+    };
+
+    /// <summary>
     /// Builds a service provider using the app's real DI wiring
     /// (AddInfrastructure + AddApiAuthentication) pointed at the test containers.
     /// </summary>
@@ -75,15 +93,7 @@ public sealed class IntegrationFixture : IAsyncLifetime
         ILoggerProvider? loggerProvider = null)
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["ConnectionStrings:DefaultConnection"] = connectionString,
-                ["Jwt:Secret"] = TestJwtSecret,
-                ["Jwt:Issuer"] = "WaxyCandles.Tests",
-                ["Jwt:Audience"] = "WaxyCandles.Tests",
-                ["RabbitMQ:Host"] = RabbitMqHost,
-                ["RabbitMQ:Port"] = RabbitMqPort.ToString()
-            })
+            .AddInMemoryCollection(TestSettings(connectionString))
             .Build();
 
         var services = new ServiceCollection();

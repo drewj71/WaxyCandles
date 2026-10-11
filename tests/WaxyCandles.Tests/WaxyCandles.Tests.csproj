@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.0.20" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="Testcontainers.MsSql" Version="4.16.0" />
     <PackageReference Include="Testcontainers.RabbitMq" Version="4.16.0" />
@@ -26,6 +27,7 @@
     <ProjectReference Include="..\..\src\WaxyCandles.Infrastructure\WaxyCandles.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\WaxyCandles.AlertWorker\WaxyCandles.AlertWorker.csproj" />
     <ProjectReference Include="..\..\src\WaxyCandles.OutboxWorker\WaxyCandles.OutboxWorker.csproj" />
+    <ProjectReference Include="..\..\src\WaxyCandles.Api\WaxyCandles.Api.csproj" />
   </ItemGroup>
 
 </Project>
