@@ -95,9 +95,8 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
             CultureInfo.InvariantCulture);
 
         var latestTradingDay =
-            DateTimeOffset.Parse(
-                quote.GetProperty("07. latest trading day").GetString()!,
-                CultureInfo.InvariantCulture);
+            ParseTradingDate(
+                quote.GetProperty("07. latest trading day").GetString()!);
 
         return new MarketQuote
         {
@@ -191,9 +190,7 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
 
         foreach (var day in timeSeries.EnumerateObject())
         {
-            var date = DateTimeOffset.Parse(
-                day.Name,
-                CultureInfo.InvariantCulture);
+            var date = ParseTradingDate(day.Name);
 
             var values = day.Value;
 
@@ -279,10 +276,7 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
 
         foreach (var item in timeSeries.EnumerateObject())
         {
-            var timestamp =
-                DateTimeOffset.Parse(
-                    item.Name,
-                    CultureInfo.InvariantCulture);
+            var timestamp = ParseEasternTimestamp(item.Name);
 
             var values = item.Value;
 
@@ -323,6 +317,44 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
         return candles
             .OrderBy(x => x.Timestamp)
             .ToList();
+    }
+
+    // Alpha Vantage timestamps carry no offset. They must not be parsed in the
+    // server's local time zone, or the same candle becomes a different instant
+    // on every machine (and candle dedup, which is by timestamp, breaks).
+
+    // Intraday times are US/Eastern (the response's "6. Time Zone").
+    // America/New_York also handles the DST switch.
+    private static readonly TimeZoneInfo MarketTimeZone =
+        TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+
+    /// <summary>"2026-09-01 16:00:00" (US/Eastern) as an absolute instant.</summary>
+    private static DateTimeOffset ParseEasternTimestamp(string value)
+    {
+        var local = DateTime.ParseExact(
+            value,
+            "yyyy-MM-dd HH:mm:ss",
+            CultureInfo.InvariantCulture);
+
+        return new DateTimeOffset(
+            local,
+            MarketTimeZone.GetUtcOffset(local));
+    }
+
+    /// <summary>
+    /// "2026-09-01" (a trading day, not an instant) as UTC midnight of that date,
+    /// so it is the same value whichever machine parses it.
+    /// </summary>
+    private static DateTimeOffset ParseTradingDate(string value)
+    {
+        var date = DateOnly.ParseExact(
+            value,
+            "yyyy-MM-dd",
+            CultureInfo.InvariantCulture);
+
+        return new DateTimeOffset(
+            date.ToDateTime(TimeOnly.MinValue),
+            TimeSpan.Zero);
     }
 
     // Alpha Vantage reports rate limits and other errors with a 200 status and an

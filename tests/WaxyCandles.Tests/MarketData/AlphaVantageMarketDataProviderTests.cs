@@ -207,6 +207,63 @@ public class AlphaVantageMarketDataProviderTests
         Assert.Equal(alphaVantageInterval, query["interval"]);
     }
 
+    // Alpha Vantage sends timestamps without an offset. These assert absolute
+    // instants (and offsets), so they hold whatever time zone the machine is in.
+
+    [Fact]
+    public async Task Daily_candle_timestamp_is_utc_midnight_of_the_trading_date()
+    {
+        _handler.RespondWith(DailyJson);
+
+        var candles = await Provider().GetHistoricalCandlesAsync("AAPL", CandleInterval.OneDay);
+
+        Assert.Equal(
+            [
+                new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero)
+            ],
+            candles.Select(c => c.Timestamp).Order());
+        Assert.All(candles, c => Assert.Equal(TimeSpan.Zero, c.Timestamp.Offset));
+    }
+
+    [Fact]
+    public async Task Quote_latest_trading_day_is_utc_midnight()
+    {
+        _handler.RespondWith(QuoteJson);
+
+        var quote = await Provider().GetCurrentQuoteAsync("AAPL");
+
+        Assert.Equal(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero), quote!.LatestTradingDay);
+        Assert.Equal(TimeSpan.Zero, quote.LatestTradingDay!.Value.Offset);
+    }
+
+    [Theory]
+    // Summer (EDT, UTC-4) and winter (EST, UTC-5).
+    [InlineData("2026-07-01 16:00:00", "2026-07-01T20:00:00Z", -4)]
+    [InlineData("2026-12-01 16:00:00", "2026-12-01T21:00:00Z", -5)]
+    // Either side of the March 2026 DST switch (2am on the 8th).
+    [InlineData("2026-03-07 09:30:00", "2026-03-07T14:30:00Z", -5)]
+    [InlineData("2026-03-09 09:30:00", "2026-03-09T13:30:00Z", -4)]
+    public async Task Intraday_times_are_interpreted_as_us_eastern(
+        string alphaVantageTime,
+        string expectedUtc,
+        int expectedOffsetHours)
+    {
+        _handler.RespondWith($$"""
+            {
+              "Time Series (60min)": {
+                "{{alphaVantageTime}}": { "1. open": "1", "2. high": "1", "3. low": "1", "4. close": "1", "5. volume": "1" }
+              }
+            }
+            """);
+
+        var candle = Assert.Single(
+            await Provider().GetHistoricalCandlesAsync("AAPL", CandleInterval.OneHour));
+
+        Assert.Equal(DateTimeOffset.Parse(expectedUtc), candle.Timestamp);
+        Assert.Equal(TimeSpan.FromHours(expectedOffsetHours), candle.Timestamp.Offset);
+    }
+
     [Fact]
     public async Task Intraday_rate_limit_response_throws_with_alpha_vantages_message()
     {

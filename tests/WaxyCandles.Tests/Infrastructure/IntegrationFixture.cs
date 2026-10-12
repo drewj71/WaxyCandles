@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -61,7 +63,11 @@ public sealed class IntegrationFixture : IAsyncLifetime
     /// <summary>
     /// Creates a uniquely named database and applies the real EF migrations to it.
     /// </summary>
-    public async Task<string> CreateDatabaseAsync()
+    /// <param name="targetMigration">
+    /// Stop at this migration instead of the latest, e.g. to seed data that a
+    /// later data migration is expected to rewrite.
+    /// </param>
+    public async Task<string> CreateDatabaseAsync(string? targetMigration = null)
     {
         var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(
             _sqlServer.GetConnectionString())
@@ -72,7 +78,7 @@ public sealed class IntegrationFixture : IAsyncLifetime
         var connectionString = builder.ConnectionString;
 
         await using var dbContext = CreateDbContext(connectionString);
-        await dbContext.Database.MigrateAsync();
+        await dbContext.GetService<IMigrator>().MigrateAsync(targetMigration);
 
         return connectionString;
     }
