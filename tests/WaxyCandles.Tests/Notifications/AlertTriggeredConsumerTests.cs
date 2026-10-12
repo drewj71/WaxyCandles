@@ -110,6 +110,30 @@ public class AlertTriggeredConsumerTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Stalled_push_times_out_without_holding_up_the_queue()
+    {
+        // Deliveries are handled one at a time and the push happens before the
+        // ack, so an unbounded push would block every notification behind it.
+        _notifier.Hang = true;
+        await StartConsumerAsync();
+
+        var first = NewMessage(_userId);
+        var second = NewMessage(_userId);
+        await PublishAsync(first);
+        await PublishAsync(second);
+
+        var started = DateTime.UtcNow;
+        await WaitForLogAsync($"Successfully processed message {second.MessageId}");
+
+        // Two ~5s push timeouts, well short of a client-side timeout (~30s).
+        Assert.InRange(DateTime.UtcNow - started, TimeSpan.Zero, TimeSpan.FromSeconds(20));
+        Assert.False(_logs.Contains("scheduled for retry"));
+
+        await using var db = NewDbContext();
+        Assert.Equal(2, await db.Notifications.CountAsync());
+    }
+
+    [Fact]
     public async Task Event_for_a_user_who_no_longer_exists_is_skipped_not_retried()
     {
         await StartConsumerAsync();
@@ -128,12 +152,28 @@ public class AlertTriggeredConsumerTests(IntegrationFixture fixture)
         Assert.Equal(0u, await _broker.MessageCountAsync(Topology.DeadLetterQueue));
     }
 
-    [Fact]
-    public async Task Event_without_a_user_is_dead_lettered()
+    public static TheoryData<string> InvalidEvents()
+    {
+        var withoutUser = NewMessage(userId: "");
+
+        // 0 is not a defined AlertDirection (Above = 1, Below = 2).
+        var undefinedDirection = NewMessage(userId: "user");
+        undefinedDirection.Direction = 0;
+
+        return new()
+        {
+            JsonSerializer.Serialize(withoutUser),
+            JsonSerializer.Serialize(undefinedDirection)
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidEvents))]
+    public async Task Invalid_event_is_dead_lettered(string payload)
     {
         await StartConsumerAsync();
 
-        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(NewMessage(userId: "")));
+        var body = Encoding.UTF8.GetBytes(payload);
         await _broker.PublishToQueueAsync(Topology.Queue, body);
 
         await Eventually.TrueAsync(

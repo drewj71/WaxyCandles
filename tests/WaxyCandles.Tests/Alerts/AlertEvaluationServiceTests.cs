@@ -4,6 +4,7 @@ using WaxyCandles.Application.Alerts.Messages;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Domain.Enums;
 using WaxyCandles.Infrastructure.Alerts;
+using WaxyCandles.Infrastructure.Persistence;
 using WaxyCandles.Tests.Infrastructure;
 
 namespace WaxyCandles.Tests.Alerts;
@@ -142,6 +143,43 @@ public class AlertEvaluationServiceTests(IntegrationFixture fixture)
             .ToList();
 
         Assert.Equal(new[] { hitA.Id, hitB.Id }.Order(), alertIds);
+    }
+
+    [Fact]
+    public async Task Concurrent_evaluations_trigger_an_alert_and_emit_its_event_once()
+    {
+        // Two price updates for the symbol evaluated at once (e.g. two AlertWorker
+        // instances). Both read the alert as untriggered before either writes.
+        var alert = await SeedAlertAsync("AAPL", AlertDirection.Above, 100m);
+        var barrier = new AlertUpdateBarrier(parties: 2);
+
+        await Task.WhenAll(
+            EvaluateThroughAsync(barrier, "AAPL", 150m),
+            EvaluateThroughAsync(barrier, "AAPL", 151m));
+
+        // Proves the race really happened: both got as far as updating.
+        Assert.Equal(2, barrier.Arrived);
+
+        await using var db = NewDbContext();
+        Assert.True((await db.Alerts.SingleAsync(a => a.Id == alert.Id)).IsTriggered);
+
+        var only = Assert.Single(await db.OutboxMessages.ToListAsync());
+        var message = JsonSerializer.Deserialize<AlertTriggeredMessage>(only.Payload)!;
+        Assert.Equal(alert.Id, message.AlertId);
+    }
+
+    private async Task EvaluateThroughAsync(
+        AlertUpdateBarrier barrier,
+        string symbol,
+        decimal price)
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlServer(ConnectionString)
+            .AddInterceptors(barrier)
+            .Options;
+
+        await using var db = new AppDbContext(options);
+        await new AlertEvaluationService(db).EvaluateAsync(symbol, price);
     }
 
     [Fact]

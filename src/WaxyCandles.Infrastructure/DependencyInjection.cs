@@ -36,7 +36,6 @@ public static class DependencyInjection
         services.AddScoped<IMarketDataService, MarketDataService>();
         services.AddScoped<IAlertEvaluationService, AlertEvaluationService>();
         services.AddSingleton<RabbitMqConnection>();
-        services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
         services.AddScoped<IHistoricalMarketDataService, HistoricalMarketDataService>();
         services.AddScoped<IWatchlistService, WatchlistService>();
         services.AddScoped<INotificationService, NotificationService>();

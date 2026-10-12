@@ -28,8 +28,6 @@ public enum ConsumeOutcome
 public abstract class RabbitMqConsumer<TMessage> : BackgroundService
     where TMessage : class
 {
-    private const int MaxRetries = 2;
-
     // How long to wait before reopening a lost channel, and before requeueing a
     // delivery whose retry/dead-letter publish failed (avoids a hot redelivery loop).
     private static readonly TimeSpan RecoveryDelay = TimeSpan.FromSeconds(5);
@@ -71,6 +69,12 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
+        // BackgroundService.StartAsync runs this synchronously up to the first
+        // await, and opening the connection below blocks (it can take a full
+        // connect timeout when the broker is unreachable). Yield first so the
+        // host's startup never waits on RabbitMQ.
+        await Task.Yield();
+
         // Connection loss is handled by RabbitMQ.Client's automatic recovery, but a
         // channel the broker closes (channel-level error) or a subscription it
         // cancels (queue deleted) is not. Rebuild both here so the worker can't
@@ -352,7 +356,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 messageId,
                 retryCount);
 
-            if (retryCount >= MaxRetries)
+            if (retryCount >= _topology.MaxRetries)
             {
                 _logger.LogError(
                     "Message {MessageId} has reached the maximum retry count. Sending to dead-letter queue.",
@@ -403,7 +407,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 "Message {MessageId} scheduled for retry {RetryCount}/{MaxRetries}.",
                 messageId,
                 nextRetryCount,
-                MaxRetries);
+                _topology.MaxRetries);
         }
     }
 

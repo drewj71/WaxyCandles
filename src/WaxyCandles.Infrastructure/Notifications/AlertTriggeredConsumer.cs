@@ -13,6 +13,10 @@ namespace WaxyCandles.Infrastructure.Notifications;
 /// </summary>
 public class AlertTriggeredConsumer : RabbitMqConsumer<AlertTriggeredMessage>
 {
+    // The push happens before the delivery is acked, and deliveries are handled
+    // one at a time, so a slow client connection must not hold up the queue.
+    private static readonly TimeSpan PushTimeout = TimeSpan.FromSeconds(5);
+
     private readonly ILogger<AlertTriggeredConsumer> _logger;
 
     public AlertTriggeredConsumer(
@@ -32,7 +36,8 @@ public class AlertTriggeredConsumer : RabbitMqConsumer<AlertTriggeredMessage>
         message.MessageId != Guid.Empty &&
         message.AlertId != Guid.Empty &&
         !string.IsNullOrWhiteSpace(message.UserId) &&
-        !string.IsNullOrWhiteSpace(message.Symbol);
+        !string.IsNullOrWhiteSpace(message.Symbol) &&
+        Enum.IsDefined(message.Direction);
 
     protected override async Task<ConsumeOutcome> ProcessAsync(
         AlertTriggeredMessage message,
@@ -65,16 +70,21 @@ public class AlertTriggeredConsumer : RabbitMqConsumer<AlertTriggeredMessage>
 
         var notification = result.Notification!;
 
-        // Best effort, after the notification is stored: a failed push must not
-        // fail (and retry) the message, or it would be retried as a duplicate.
+        // Best effort, after the notification is stored: a failed or slow push
+        // must not fail (and retry) the message, which would only find a duplicate.
+        using var pushTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        pushTimeout.CancelAfter(PushTimeout);
+
         try
         {
             await scopedServices
                 .GetRequiredService<IRealtimeNotifier>()
-                .NotifyAsync(message.UserId, notification, cancellationToken);
+                .NotifyAsync(message.UserId, notification, pushTimeout.Token);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
+            // Includes the push timing out. Only a shutdown propagates.
             _logger.LogWarning(
                 ex,
                 "Could not push notification {NotificationId} to user {UserId}; it is stored and will show on their next fetch.",

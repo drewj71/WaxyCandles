@@ -193,6 +193,24 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Type_is_matched_like_the_database_does_ignoring_case_and_trailing_spaces()
+    {
+        // SQL Server's default collation selects these as routed; the lookup must
+        // agree, or the row would throw and block every batch it heads.
+        var oddlyCased = await SeedRawOutboxAsync(
+            "alerttriggeredmessage ",
+            "{}",
+            T0);
+        var price = await SeedOutboxAsync(T0.AddSeconds(1), "AAPL");
+
+        await StartWorkerAsync();
+        await WaitUntilAllProcessedAsync();
+
+        Assert.Equal([oddlyCased.Payload], await DrainPayloadsAsync(QueueTopology.AlertTriggered.Queue));
+        Assert.Equal([price.Payload], await DrainPayloadsAsync());
+    }
+
+    [Fact]
     public async Task Row_with_an_unrouted_type_stays_pending_and_does_not_block_others()
     {
         // Older than every routable row, so it would be first in line.

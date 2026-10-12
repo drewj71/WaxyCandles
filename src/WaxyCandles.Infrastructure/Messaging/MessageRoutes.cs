@@ -9,8 +9,10 @@ namespace WaxyCandles.Infrastructure.Messaging;
 /// </summary>
 public static class MessageRoutes
 {
+    // Case-insensitive, like the SQL Server collation the outbox filters with,
+    // so every row the query selects as routed is also found here.
     public static readonly IReadOnlyDictionary<string, QueueTopology> ByMessageType =
-        new Dictionary<string, QueueTopology>
+        new Dictionary<string, QueueTopology>(StringComparer.OrdinalIgnoreCase)
         {
             [nameof(StockPriceUpdatedMessage)] = QueueTopology.StockPriceUpdated,
             [nameof(AlertTriggeredMessage)] = QueueTopology.AlertTriggered

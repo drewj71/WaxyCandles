@@ -188,7 +188,9 @@ public class OutboxPublisherWorker : BackgroundService
         {
             foreach (var message in messages)
             {
-                var topology = MessageRoutes.ByMessageType[message.Type];
+                // TrimEnd: SQL Server ignores trailing spaces when comparing, so
+                // the query can select "Type " for "Type".
+                var topology = MessageRoutes.ByMessageType[message.Type.TrimEnd()];
 
                 var body =
                     Encoding.UTF8.GetBytes(

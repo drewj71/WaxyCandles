@@ -11,6 +11,9 @@ namespace WaxyCandles.Infrastructure.Notifications;
 
 public class NotificationService : INotificationService
 {
+    // Named by EF's convention in the AddNotifications migration.
+    private const string RecipientForeignKey = "FK_Notifications_AspNetUsers_UserId";
+
     private readonly AppDbContext _dbContext;
 
     public NotificationService(AppDbContext dbContext)
@@ -63,7 +66,7 @@ public class NotificationService : INotificationService
             return new CreateNotificationResult(CreateNotificationStatus.Duplicate);
         }
         catch (DbUpdateException ex)
-            when (ex.IsForeignKeyViolation())
+            when (ex.IsForeignKeyViolation(RecipientForeignKey))
         {
             // Alerts have no foreign key to users, so an alert can outlive its
             // user. Retrying would fail the same way every time.

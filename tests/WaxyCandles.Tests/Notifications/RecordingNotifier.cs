@@ -4,7 +4,7 @@ using WaxyCandles.Application.Notifications.Interfaces;
 
 namespace WaxyCandles.Tests.Notifications;
 
-/// <summary>Records pushes instead of sending them; can be told to fail.</summary>
+/// <summary>Records pushes instead of sending them; can be told to fail or hang.</summary>
 public sealed class RecordingNotifier : IRealtimeNotifier
 {
     private readonly ConcurrentQueue<(string UserId, NotificationResponse Notification)> _pushes = new();
@@ -14,7 +14,10 @@ public sealed class RecordingNotifier : IRealtimeNotifier
 
     public bool Fail { get; set; }
 
-    public Task NotifyAsync(
+    /// <summary>Never completes until cancelled, like a stalled client connection.</summary>
+    public bool Hang { get; set; }
+
+    public async Task NotifyAsync(
         string userId,
         NotificationResponse notification,
         CancellationToken cancellationToken = default)
@@ -24,7 +27,11 @@ public sealed class RecordingNotifier : IRealtimeNotifier
             throw new InvalidOperationException("Simulated push failure");
         }
 
+        if (Hang)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+
         _pushes.Enqueue((userId, notification));
-        return Task.CompletedTask;
     }
 }

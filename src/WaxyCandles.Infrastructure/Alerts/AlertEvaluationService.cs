@@ -22,38 +22,86 @@ public class AlertEvaluationService : IAlertEvaluationService
     decimal price,
     CancellationToken cancellationToken = default)
     {
-        var alerts = await _dbContext.Alerts
-            .Where(a =>
-                !a.IsTriggered &&
-                a.Symbol == symbol)
-            .ToListAsync(cancellationToken);
+        // Claiming a trigger and writing its event must commit together. The
+        // AlertWorker calls this inside its own transaction; otherwise use one here.
+        var ownTransaction =
+            _dbContext.Database.CurrentTransaction is null
+                ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+                : null;
 
-        foreach (var alert in alerts)
+        try
         {
-            var triggered = alert.Direction switch
+            var alerts = await _dbContext.Alerts
+                .AsNoTracking()
+                .Where(a =>
+                    !a.IsTriggered &&
+                    a.Symbol == symbol)
+                .ToListAsync(cancellationToken);
+
+            foreach (var alert in alerts)
             {
-                AlertDirection.Above =>
-                    price >= alert.TargetPrice,
+                var triggered = alert.Direction switch
+                {
+                    AlertDirection.Above =>
+                        price >= alert.TargetPrice,
 
-                AlertDirection.Below =>
-                    price <= alert.TargetPrice,
+                    AlertDirection.Below =>
+                        price <= alert.TargetPrice,
 
-                _ => false
-            };
+                    _ => false
+                };
 
-            if (triggered)
+                if (triggered &&
+                    await TryClaimTriggerAsync(alert, cancellationToken))
+                {
+                    AddTriggeredEvent(alert, price);
+                }
+            }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            if (ownTransaction is not null)
             {
-                alert.IsTriggered = true;
-                alert.TriggeredAt = DateTimeOffset.UtcNow;
-
-                AddTriggeredEvent(alert, price);
+                await ownTransaction.CommitAsync(cancellationToken);
             }
         }
+        finally
+        {
+            if (ownTransaction is not null)
+            {
+                await ownTransaction.DisposeAsync();
+            }
+        }
+    }
 
-        // One SaveChanges for the alert updates and their outbox events, so an
-        // event exists exactly when its alert is marked triggered. In the
-        // AlertWorker this also runs inside the consumer's transaction.
-        await _dbContext.SaveChangesAsync(cancellationToken);
+    /// <summary>
+    /// Marks the alert triggered only if it still isn't. The read above can be
+    /// stale when two price updates for the symbol are evaluated concurrently
+    /// (scaled-out workers): both see the alert untriggered, but only one of
+    /// these conditional updates can change the row, so only one emits an event.
+    /// </summary>
+    private async Task<bool> TryClaimTriggerAsync(
+        Alert alert,
+        CancellationToken cancellationToken)
+    {
+        var triggeredAt = DateTimeOffset.UtcNow;
+
+        var claimed = await _dbContext.Alerts
+            .Where(a => a.Id == alert.Id && !a.IsTriggered)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(a => a.IsTriggered, true)
+                    .SetProperty(a => a.TriggeredAt, triggeredAt),
+                cancellationToken);
+
+        if (claimed == 0)
+        {
+            return false;
+        }
+
+        alert.IsTriggered = true;
+        alert.TriggeredAt = triggeredAt;
+        return true;
     }
 
     private void AddTriggeredEvent(Alert alert, decimal price)
