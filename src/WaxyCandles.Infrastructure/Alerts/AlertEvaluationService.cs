@@ -31,30 +31,32 @@ public class AlertEvaluationService : IAlertEvaluationService
 
         try
         {
+            var now = DateTimeOffset.UtcNow;
+
             var alerts = await _dbContext.Alerts
                 .AsNoTracking()
-                .Where(a =>
-                    !a.IsTriggered &&
-                    a.Symbol == symbol)
+                .Where(AlertQueries.IsWatching(now))
+                .Where(a => a.Symbol == symbol)
                 .ToListAsync(cancellationToken);
 
             foreach (var alert in alerts)
             {
-                var triggered = alert.Direction switch
+                var conditionMet = alert.IsConditionMet(price);
+
+                if (!alert.IsTriggered && conditionMet)
                 {
-                    AlertDirection.Above =>
-                        price >= alert.TargetPrice,
-
-                    AlertDirection.Below =>
-                        price <= alert.TargetPrice,
-
-                    _ => false
-                };
-
-                if (triggered &&
-                    await TryClaimTriggerAsync(alert, cancellationToken))
+                    if (await TryClaimTriggerAsync(alert, now, cancellationToken))
+                    {
+                        AddTriggeredEvent(alert, price);
+                    }
+                }
+                else if (alert.IsTriggered &&
+                         !conditionMet &&
+                         alert.Frequency == AlertFrequency.EveryCross)
                 {
-                    AddTriggeredEvent(alert, price);
+                    // The price moved back across the target: arm it for the next
+                    // cross. No event; a notification only ever means "it fired".
+                    await RearmAsync(alert, cancellationToken);
                 }
             }
 
@@ -75,23 +77,29 @@ public class AlertEvaluationService : IAlertEvaluationService
     }
 
     /// <summary>
-    /// Marks the alert triggered only if it still isn't. The read above can be
-    /// stale when two price updates for the symbol are evaluated concurrently
-    /// (scaled-out workers): both see the alert untriggered, but only one of
-    /// these conditional updates can change the row, so only one emits an event.
+    /// Fires the alert only if, at the moment of writing, it is still armed,
+    /// enabled, unexpired and (for a repeating alert) past its cooldown. The read
+    /// above can be stale when price updates for the symbol are evaluated
+    /// concurrently or the user just changed the alert; only one of several
+    /// concurrent conditional updates can change the row, so only one emits an event.
     /// </summary>
     private async Task<bool> TryClaimTriggerAsync(
         Alert alert,
+        DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        var triggeredAt = DateTimeOffset.UtcNow;
-
         var claimed = await _dbContext.Alerts
             .Where(a => a.Id == alert.Id && !a.IsTriggered)
+            .Where(AlertQueries.IsWatching(now))
+            .Where(a =>
+                a.Frequency == AlertFrequency.Once ||
+                a.TriggeredAt == null ||
+                a.TriggeredAt.Value.AddMinutes(a.CooldownMinutes) <= now)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(a => a.IsTriggered, true)
-                    .SetProperty(a => a.TriggeredAt, triggeredAt),
+                    .SetProperty(a => a.TriggeredAt, now)
+                    .SetProperty(a => a.TriggerCount, a => a.TriggerCount + 1),
                 cancellationToken);
 
         if (claimed == 0)
@@ -100,9 +108,22 @@ public class AlertEvaluationService : IAlertEvaluationService
         }
 
         alert.IsTriggered = true;
-        alert.TriggeredAt = triggeredAt;
+        alert.TriggeredAt = now;
+        alert.TriggerCount++;
         return true;
     }
+
+    private Task<int> RearmAsync(
+        Alert alert,
+        CancellationToken cancellationToken) =>
+        _dbContext.Alerts
+            .Where(a =>
+                a.Id == alert.Id &&
+                a.IsTriggered &&
+                a.Frequency == AlertFrequency.EveryCross)
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(a => a.IsTriggered, false),
+                cancellationToken);
 
     private void AddTriggeredEvent(Alert alert, decimal price)
     {

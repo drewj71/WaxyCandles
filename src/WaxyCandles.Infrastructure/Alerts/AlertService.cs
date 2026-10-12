@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using WaxyCandles.Application.Alerts.DTOs;
 using WaxyCandles.Application.Alerts.Interfaces;
+using WaxyCandles.Application.Alerts.Validation;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Infrastructure.Persistence;
 
@@ -19,50 +20,46 @@ public class AlertService : IAlertService
         string userId,
         CreateAlertRequest request)
     {
+        var now = DateTimeOffset.UtcNow;
+
+        AlertRequestValidator.Validate(request, now);
+
         var alert = new Alert
         {
             Id = Guid.NewGuid(),
             UserId = userId,
-            Symbol = request.Symbol.ToUpperInvariant(),
+            Symbol = AlertRequestValidator.NormalizeSymbol(request.Symbol),
             TargetPrice = request.TargetPrice,
             Direction = request.Direction,
+            Frequency = request.Frequency,
+            CooldownMinutes = request.CooldownMinutes,
+            ExpiresAt = request.ExpiresAt,
+            IsEnabled = true,
             IsTriggered = false,
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = now
         };
 
         _dbContext.Alerts.Add(alert);
 
         await _dbContext.SaveChangesAsync();
 
-        return new AlertResponse
-        {
-            Id = alert.Id,
-            Symbol = alert.Symbol,
-            TargetPrice = alert.TargetPrice,
-            Direction = alert.Direction,
-            IsTriggered = alert.IsTriggered,
-            CreatedAt = alert.CreatedAt
-        };
+        return AlertResponse.From(alert, now);
     }
 
     public async Task<IReadOnlyList<AlertResponse>> GetAllAsync(
         string userId)
     {
         var alerts = await _dbContext.Alerts
+            .AsNoTracking()
             .Where(a => a.UserId == userId)
             .OrderByDescending(a => a.CreatedAt)
-            .Select(a => new AlertResponse
-            {
-                Id = a.Id,
-                Symbol = a.Symbol,
-                TargetPrice = a.TargetPrice,
-                Direction = a.Direction,
-                IsTriggered = a.IsTriggered,
-                CreatedAt = a.CreatedAt
-            })
             .ToListAsync();
 
-        return alerts;
+        var now = DateTimeOffset.UtcNow;
+
+        return alerts
+            .Select(a => AlertResponse.From(a, now))
+            .ToList();
     }
 
     public async Task<AlertResponse?> GetByIdAsync(
@@ -70,20 +67,12 @@ public class AlertService : IAlertService
         string userId)
     {
         var alert = await _dbContext.Alerts
-            .Where(a => a.Id == id && a.UserId == userId)
-            .Select(a => new AlertResponse
-            {
-                Id = a.Id,
-                Symbol = a.Symbol,
-                TargetPrice = a.TargetPrice,
-                Direction = a.Direction,
-                IsTriggered = a.IsTriggered,
-                CreatedAt = a.CreatedAt
-            })
-            .FirstOrDefaultAsync();
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId);
 
-        return alert;
-
+        return alert is null
+            ? null
+            : AlertResponse.From(alert, DateTimeOffset.UtcNow);
     }
 
     public async Task<AlertResponse?> UpdateAsync(
@@ -91,6 +80,8 @@ public class AlertService : IAlertService
         string userId,
         UpdateAlertRequest request)
     {
+        var now = DateTimeOffset.UtcNow;
+
         var alert = await _dbContext.Alerts
             .FirstOrDefaultAsync(a =>
                 a.Id == id &&
@@ -101,20 +92,31 @@ public class AlertService : IAlertService
             return null;
         }
 
+        AlertRequestValidator.Validate(request, alert.ExpiresAt, now);
+
+        // Changing what the alert fires on re-arms it: the old trigger was for a
+        // different condition. Toggling it or changing the expiry doesn't, and
+        // the firing history (TriggeredAt, TriggerCount) is kept either way.
+        var conditionChanged =
+            alert.TargetPrice != request.TargetPrice ||
+            alert.Direction != request.Direction ||
+            alert.Frequency != request.Frequency;
+
         alert.TargetPrice = request.TargetPrice;
         alert.Direction = request.Direction;
+        alert.Frequency = request.Frequency;
+        alert.CooldownMinutes = request.CooldownMinutes;
+        alert.ExpiresAt = request.ExpiresAt;
+        alert.IsEnabled = request.IsEnabled;
+
+        if (conditionChanged)
+        {
+            alert.IsTriggered = false;
+        }
 
         await _dbContext.SaveChangesAsync();
 
-        return new AlertResponse
-        {
-            Id = alert.Id,
-            Symbol = alert.Symbol,
-            TargetPrice = alert.TargetPrice,
-            Direction = alert.Direction,
-            IsTriggered = alert.IsTriggered,
-            CreatedAt = alert.CreatedAt
-        };
+        return AlertResponse.From(alert, now);
     }
 
     public async Task DeleteAsync(Guid id, string userId)

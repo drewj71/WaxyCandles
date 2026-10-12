@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using WaxyCandles.Application.Authentication.Exceptions;
+using WaxyCandles.Application.Common.Exceptions;
 
 namespace WaxyCandles.Api.Middleware;
 
@@ -36,7 +37,7 @@ public class ExceptionHandlingMiddleware
                 UserAlreadyExistsException =>
                     (HttpStatusCode.Conflict, ex.Message),
 
-                RegistrationFailedException =>
+                RegistrationFailedException or RequestValidationException =>
                     (HttpStatusCode.BadRequest, ex.Message),
 
                 _ => (HttpStatusCode.InternalServerError, "An unexpected error occurred.")
@@ -58,10 +59,10 @@ public class ExceptionHandlingMiddleware
             context.Response.StatusCode = (int)statusCode;
 
 
-            var response = new
-            {
-                message
-            };
+            // Validation failures also say which fields were wrong.
+            object response = ex is RequestValidationException validation
+                ? new { message, errors = validation.Errors }
+                : new { message };
 
 
             await context.Response.WriteAsync(

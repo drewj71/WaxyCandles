@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using WaxyCandles.Application.MarketData.Interfaces;
 using WaxyCandles.Application.MarketData.Messages;
 using WaxyCandles.Domain.Entities;
+using WaxyCandles.Infrastructure.Alerts;
 using WaxyCandles.Infrastructure.Persistence;
 
 namespace WaxyCandles.Infrastructure.MarketData;
@@ -24,7 +25,7 @@ public class MarketDataService : IMarketDataService
         CancellationToken cancellationToken = default)
     {
         var alertSymbols = await _dbContext.Alerts
-            .Where(a => !a.IsTriggered)
+            .Where(AlertQueries.IsWatching(DateTimeOffset.UtcNow))
             .Select(a => a.Symbol)
             .Distinct()
             .ToListAsync(cancellationToken);

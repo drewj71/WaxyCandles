@@ -161,10 +161,19 @@ namespace WaxyCandles.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int>("CooldownMinutes")
+                        .HasColumnType("int");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
                     b.Property<int>("Direction")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("ExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("Frequency")
                         .HasColumnType("int");
 
                     b.Property<bool>("IsEnabled")
@@ -180,6 +189,9 @@ namespace WaxyCandles.Infrastructure.Migrations
                     b.Property<decimal>("TargetPrice")
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("TriggerCount")
+                        .HasColumnType("int");
 
                     b.Property<DateTimeOffset?>("TriggeredAt")
                         .HasColumnType("datetimeoffset");

@@ -71,6 +71,24 @@ public class MarketDataServiceTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Polls_only_symbols_with_an_alert_that_still_needs_prices()
+    {
+        await SeedAlertAsync("ARMD");                                         // armed
+        await SeedAlertAsync("REPT", isTriggered: true,
+            frequency: AlertFrequency.EveryCross);                            // fired, repeating: needs prices to re-arm
+        await SeedAlertAsync("ONCE", isTriggered: true);                      // fired, one-time: done
+        await SeedAlertAsync("DSBL", isEnabled: false);                       // disabled
+        await SeedAlertAsync("EXPD", expiresAt: DateTimeOffset.UtcNow.AddMinutes(-1)); // expired
+        await SeedAlertAsync("LATR", expiresAt: DateTimeOffset.UtcNow.AddDays(1));     // expires later
+
+        await UpdatePricesAsync();
+
+        Assert.Equal(
+            ["ARMD", "LATR", "REPT"],
+            _provider.QuoteRequests.Order().ToArray());
+    }
+
+    [Fact]
     public async Task Symbol_with_no_quote_is_skipped_without_affecting_others()
     {
         await SeedAlertAsync("AAPL");
@@ -131,7 +149,10 @@ public class MarketDataServiceTests(IntegrationFixture fixture)
     private async Task SeedAlertAsync(
         string symbol,
         string userId = "user-1",
-        bool isTriggered = false)
+        bool isTriggered = false,
+        AlertFrequency frequency = AlertFrequency.Once,
+        bool isEnabled = true,
+        DateTimeOffset? expiresAt = null)
     {
         await using var db = NewDbContext();
         db.Alerts.Add(new Alert
@@ -141,7 +162,10 @@ public class MarketDataServiceTests(IntegrationFixture fixture)
             Symbol = symbol,
             Direction = AlertDirection.Above,
             TargetPrice = 100m,
-            IsTriggered = isTriggered
+            IsTriggered = isTriggered,
+            Frequency = frequency,
+            IsEnabled = isEnabled,
+            ExpiresAt = expiresAt
         });
         await db.SaveChangesAsync();
     }

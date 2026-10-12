@@ -185,6 +185,14 @@ Supported alert directions include:
 * Price reaches or exceeds target
 * Price reaches or falls below target
 
+Alerts can also be:
+
+* **One-time or repeating.** A repeating ("every cross") alert fires each time the price crosses the target. After firing, it re-arms once the price moves back across the target. A per-alert cooldown (1–1440 minutes, default 15) stops it firing repeatedly while the price wobbles around the target.
+* **Enabled or disabled.**
+* **Set to expire** at a chosen time.
+
+Each alert reports a status (`Active`, `Triggered`, `Disabled` or `Expired`), when it last fired, and how many times it has fired. Changing an alert's target, direction or repeat setting re-arms it. Invalid requests return `400` with per-field errors.
+
 Example:
 
 ```text
@@ -193,7 +201,7 @@ Target: $350
 Direction: Above
 ```
 
-When a market-price update is received, the Alert Worker evaluates matching untriggered alerts.
+When a market-price update is received, the Alert Worker evaluates the matching alerts that are enabled, not expired, and either armed or repeating.
 
 ## Alert Notifications
 

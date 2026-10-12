@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using WaxyCandles.Api.Middleware;
 using WaxyCandles.Application.Authentication.Exceptions;
+using WaxyCandles.Application.Common.Exceptions;
 
 namespace WaxyCandles.Tests.Api;
 
@@ -50,6 +51,25 @@ public class ExceptionHandlingMiddlewareTests
 
         var body = await ReadBodyAsync(context);
         Assert.Equal(exception.Message, body.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task Validation_errors_become_400_with_the_field_errors()
+    {
+        var exception = new RequestValidationException(new Dictionary<string, string[]>
+        {
+            ["targetPrice"] = ["Target price must be greater than 0."]
+        });
+
+        var context = await InvokeAsync(_ => throw exception);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+
+        var body = await ReadBodyAsync(context);
+        Assert.Equal(exception.Message, body.GetProperty("message").GetString());
+        Assert.Equal(
+            "Target price must be greater than 0.",
+            body.GetProperty("errors").GetProperty("targetPrice")[0].GetString());
     }
 
     [Fact]
