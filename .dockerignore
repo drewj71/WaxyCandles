@@ -1,0 +1,16 @@
+# Only src/ is needed to build the images.
+.git
+.github
+.vs
+.vscode
+.claude
+web
+tests
+**/bin
+**/obj
+
+# Local config and secrets must never be baked into an image. Containers get
+# their configuration from environment variables (see docker-compose.yml).
+.env
+**/appsettings*.json
+**/secrets.json

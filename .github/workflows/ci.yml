@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or PR cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # The projects target net9.0 (tests need that runtime); the 10.0 SDK
+      # matches what's used locally to build.
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore WaxyCandles.sln
+
+      - name: Build
+        run: dotnet build WaxyCandles.sln --no-restore --configuration Release
+
+      # Integration tests start SQL Server and RabbitMQ with Testcontainers,
+      # using the runner's Docker.
+      - name: Test
+        run: >
+          dotnet test tests/WaxyCandles.Tests
+          --no-build
+          --configuration Release
+          --logger trx
+          --results-directory TestResults
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: TestResults
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      # Type-checks (tsc -b) and builds.
+      - run: npm run build
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # docker compose validates the secrets the stack requires even just to
+    # build. These placeholders are never used: nothing is started.
+    env:
+      MSSQL_SA_PASSWORD: ci-build-only
+      JWT_SECRET: ci-build-only
+      ALPHAVANTAGE_API_KEY: ci-build-only
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build all service images
+        run: docker compose -f docker-compose.app.yml build

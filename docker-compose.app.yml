@@ -1,0 +1,123 @@
+# The whole stack in containers: SQL Server, RabbitMQ, a one-shot migrator,
+# the API and all three workers.
+#
+#   docker compose -f docker-compose.app.yml up -d --build
+#
+# Needs a git-ignored .env file next to this one with:
+#   MSSQL_SA_PASSWORD     sa password for the containerised SQL Server. Must meet
+#                         SQL Server's complexity rules; avoid ";" (it goes into a
+#                         connection string).
+#   JWT_SECRET            API signing key, a long random string (32+ characters).
+#   ALPHAVANTAGE_API_KEY  for the price polling worker.
+#   JWT_ISSUER, JWT_AUDIENCE  optional, default "WaxyCandles".
+# Compose stops with "Set <NAME> in .env" if a required one is missing.
+#
+# The API is then at http://localhost:5148 (same as `dotnet run`), so the
+# Vite dev server works against it unchanged. This is separate from
+# docker-compose.yml so that plain `docker compose up -d` keeps starting only
+# RabbitMQ and never needs a .env file.
+
+include:
+  - docker-compose.yml
+
+x-database: &database
+  # Its own SQL Server with SQL authentication: Linux containers can't use the
+  # Windows authentication (Trusted_Connection) your local SQL Server uses.
+  ConnectionStrings__DefaultConnection: "Server=sqlserver;Database=WaxyCandles;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};TrustServerCertificate=True;"
+
+x-messaging: &messaging
+  RabbitMQ__Host: rabbitmq
+
+x-jwt: &jwt
+  Jwt__Secret: ${JWT_SECRET:?Set JWT_SECRET in .env}
+  Jwt__Issuer: ${JWT_ISSUER:-WaxyCandles}
+  Jwt__Audience: ${JWT_AUDIENCE:-WaxyCandles}
+
+x-dotnet-service: &dotnet-service
+  restart: unless-stopped
+  depends_on:
+    migrator:
+      condition: service_completed_successfully
+    rabbitmq:
+      condition: service_healthy
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: waxycandles-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
+    ports:
+      # Not 1433, which the local SQL Server already uses.
+      - "14333:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # Applies pending EF migrations, then exits. Everything else waits for it.
+  migrator:
+    build:
+      context: .
+      target: migrator
+    environment:
+      <<: [*database, *jwt]
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: app
+      args:
+        PROJECT: WaxyCandles.Api
+    container_name: waxycandles-api
+    environment:
+      <<: [*database, *messaging, *jwt]
+    ports:
+      - "5148:8080"
+
+  price-polling-worker:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: app
+      args:
+        PROJECT: WaxyCandles.PricePollingWorker
+    container_name: waxycandles-price-polling-worker
+    environment:
+      <<: [*database, *messaging]
+      AlphaVantage__ApiKey: ${ALPHAVANTAGE_API_KEY:?Set ALPHAVANTAGE_API_KEY in .env}
+
+  outbox-worker:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: app
+      args:
+        PROJECT: WaxyCandles.OutboxWorker
+    container_name: waxycandles-outbox-worker
+    environment:
+      <<: [*database, *messaging]
+
+  alert-worker:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: app
+      args:
+        PROJECT: WaxyCandles.AlertWorker
+    container_name: waxycandles-alert-worker
+    environment:
+      <<: [*database, *messaging]
+
+volumes:
+  sqlserver-data:

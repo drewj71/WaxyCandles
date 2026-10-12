@@ -1,3 +1,9 @@
+# Infrastructure for local development: RabbitMQ only. Run the .NET projects
+# with `dotnet run` against it (SQL Server runs locally, outside Docker).
+#   docker compose up -d
+#
+# To run the whole stack in containers instead, see docker-compose.app.yml.
+
 services:
   rabbitmq:
     image: rabbitmq:4-management
@@ -5,3 +11,9 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s

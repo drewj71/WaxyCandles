@@ -19,9 +19,12 @@ dotnet run --project src/WaxyCandles.PricePollingWorker
 dotnet run --project src/WaxyCandles.AlertWorker
 dotnet run --project src/WaxyCandles.OutboxWorker
 docker compose up -d                   # start RabbitMQ only (management UI at localhost:15672)
+docker compose -f docker-compose.app.yml up -d --build   # whole stack in containers (needs root .env)
 ```
 
-SQL Server runs locally and is NOT part of the compose file.
+For local development SQL Server runs on the host (Windows auth) and is NOT part of `docker-compose.yml`. `docker-compose.app.yml` includes it and adds its own containerised SQL Server (SQL auth, host port 14333), a one-shot EF migrations-bundle `migrator`, the API (host port 5148) and the three workers, all built from the root `Dockerfile` (`app` target with `--build-arg PROJECT=...`, or `migrator`). Required secrets come from a git-ignored root `.env` (`MSSQL_SA_PASSWORD`, `JWT_SECRET`, `ALPHAVANTAGE_API_KEY`); compose fails with "Set X in .env" if one is missing. `.dockerignore` excludes all `appsettings*.json`, so containers are configured only by environment variables.
+
+CI (`.github/workflows/ci.yml`) runs backend build + tests, frontend lint + build, and a Docker image build on every PR and push to `master`.
 
 For an end-to-end run, RabbitMQ plus the API and all three workers must be running (each is its own `dotnet run`).
 

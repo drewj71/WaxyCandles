@@ -492,6 +492,40 @@ Example:
 
 ---
 
+## Running the Whole Stack in Docker
+
+`docker-compose.app.yml` runs everything in containers: SQL Server, RabbitMQ, a one-shot migrator that applies the EF Core migrations, the API and all three workers.
+
+Create a git-ignored `.env` file in the repository root:
+
+```bash
+MSSQL_SA_PASSWORD=   # sa password for the containerised SQL Server (SQL Server complexity rules; no ";")
+JWT_SECRET=          # long random string, 32+ characters
+ALPHAVANTAGE_API_KEY=
+```
+
+Then:
+
+```bash
+docker compose -f docker-compose.app.yml up -d --build
+```
+
+The API is available on `http://localhost:5148`, the same as with `dotnet run`, so the Vite dev server works against it unchanged. The containerised SQL Server is exposed on port `14333` so it doesn't clash with a local SQL Server on `1433`.
+
+Plain `docker compose up -d` still starts only RabbitMQ for local development.
+
+---
+
+## Continuous Integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and every push to `master`:
+
+* **Backend**: build plus the full xUnit suite. Integration tests use Testcontainers for real SQL Server and RabbitMQ.
+* **Frontend**: `npm run lint` and `npm run build`.
+* **Docker**: builds every service image.
+
+---
+
 # API Examples
 
 ### Get a stock
