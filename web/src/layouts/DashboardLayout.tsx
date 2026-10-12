@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import NotificationBell from "@/components/NotificationBell";
 
 import {
     DropdownMenu,
@@ -184,10 +185,12 @@ function DashboardLayout({
                     <header className="flex h-14 items-center border-b px-4">
                         <SidebarTrigger />
 
-                        <div className="ml-auto flex items-center">
+                        <div className="ml-auto flex items-center gap-3">
                             <span className="text-sm text-muted-foreground">
                                 Market Dashboard
                             </span>
+
+                            <NotificationBell />
                         </div>
                     </header>
 
