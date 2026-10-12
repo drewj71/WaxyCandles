@@ -23,8 +23,9 @@ function Dashboard() {
     const stocks = watchlistQuery.data ?? [];
     const alerts = alertsQuery.data ?? [];
 
+    // Armed and watching: excludes fired, disabled and expired alerts.
     const activeAlerts = alerts.filter(
-        (alert) => !alert.isTriggered,
+        (alert) => alert.status === "Active",
     );
 
     return (
