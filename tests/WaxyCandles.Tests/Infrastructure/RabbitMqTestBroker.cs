@@ -3,6 +3,7 @@ using System.Text.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 using WaxyCandles.Application.MarketData.Messages;
+using WaxyCandles.Infrastructure.Messaging;
 
 namespace WaxyCandles.Tests.Infrastructure;
 
@@ -86,17 +87,33 @@ public sealed class RabbitMqTestBroker : IAsyncDisposable
     /// </summary>
     public async Task DeleteTopologyAsync()
     {
-        foreach (var queue in new[] { MainQueue, RetryQueue, DeadLetterQueue })
+        foreach (var topology in MessageRoutes.ByMessageType.Values.Distinct())
         {
-            await using var channel = await _connection.CreateChannelAsync();
-            await channel.QueueDeleteAsync(queue);
-        }
+            foreach (var queue in new[] { topology.Queue, topology.RetryQueue, topology.DeadLetterQueue })
+            {
+                await using var channel = await _connection.CreateChannelAsync();
+                await channel.QueueDeleteAsync(queue);
+            }
 
-        foreach (var exchange in new[] { RetryExchange, DeadLetterExchange })
-        {
-            await using var channel = await _connection.CreateChannelAsync();
-            await channel.ExchangeDeleteAsync(exchange);
+            foreach (var exchange in new[] { topology.RetryExchange, topology.DeadLetterExchange })
+            {
+                await using var channel = await _connection.CreateChannelAsync();
+                await channel.ExchangeDeleteAsync(exchange);
+            }
         }
+    }
+
+    /// <summary>Publishes a raw body straight to a queue (default exchange).</summary>
+    public async Task PublishToQueueAsync(string queue, byte[] body)
+    {
+        await using var channel = await _connection.CreateChannelAsync();
+
+        await channel.BasicPublishAsync(
+            exchange: string.Empty,
+            routingKey: queue,
+            mandatory: false,
+            basicProperties: new BasicProperties { Persistent = true },
+            body: body);
     }
 
     public ValueTask DisposeAsync() => _connection.DisposeAsync();

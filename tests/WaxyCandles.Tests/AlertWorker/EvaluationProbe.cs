@@ -16,6 +16,12 @@ public sealed class EvaluationProbe
     /// <summary>Runs before the real evaluation. Receives the 1-based attempt number.</summary>
     public Func<int, Task>? BeforeEvaluate { get; set; }
 
+    /// <summary>
+    /// Runs after the real evaluation has saved its changes (inside the consumer's
+    /// transaction). Receives the 1-based attempt number.
+    /// </summary>
+    public Func<int, Task>? AfterEvaluate { get; set; }
+
     internal async Task OnEvaluateAsync(string symbol)
     {
         _calls.Enqueue(symbol);
@@ -23,6 +29,14 @@ public sealed class EvaluationProbe
         if (BeforeEvaluate is not null)
         {
             await BeforeEvaluate(_calls.Count);
+        }
+    }
+
+    internal async Task OnEvaluatedAsync()
+    {
+        if (AfterEvaluate is not null)
+        {
+            await AfterEvaluate(_calls.Count);
         }
     }
 }
@@ -38,5 +52,6 @@ public sealed class ProbingAlertEvaluationService(
     {
         await probe.OnEvaluateAsync(symbol);
         await inner.EvaluateAsync(symbol, price, cancellationToken);
+        await probe.OnEvaluatedAsync();
     }
 }

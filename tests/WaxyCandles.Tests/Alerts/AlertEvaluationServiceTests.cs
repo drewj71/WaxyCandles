@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using WaxyCandles.Application.Alerts.Messages;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Domain.Enums;
 using WaxyCandles.Infrastructure.Alerts;
@@ -95,6 +97,51 @@ public class AlertEvaluationServiceTests(IntegrationFixture fixture)
         Assert.True((await LoadAlertAsync(belowHit.Id)).IsTriggered);
         Assert.False((await LoadAlertAsync(aboveMiss.Id)).IsTriggered);
         Assert.True((await LoadAlertAsync(otherUser.Id)).IsTriggered);
+    }
+
+    [Fact]
+    public async Task Triggering_an_alert_writes_an_alert_triggered_outbox_event()
+    {
+        var alert = await SeedAlertAsync("AAPL", AlertDirection.Above, 100m, userId: "user-7");
+
+        await EvaluateAsync("AAPL", 150.25m);
+
+        await using var db = NewDbContext();
+        var entry = await db.OutboxMessages.SingleAsync();
+        var saved = await db.Alerts.SingleAsync(a => a.Id == alert.Id);
+
+        Assert.Equal(nameof(AlertTriggeredMessage), entry.Type);
+        Assert.Null(entry.ProcessedAt);
+
+        var message = JsonSerializer.Deserialize<AlertTriggeredMessage>(entry.Payload)!;
+        Assert.Equal(entry.Id, message.MessageId);
+        Assert.Equal(alert.Id, message.AlertId);
+        Assert.Equal("user-7", message.UserId);
+        Assert.Equal("AAPL", message.Symbol);
+        Assert.Equal(AlertDirection.Above, message.Direction);
+        Assert.Equal(100m, message.TargetPrice);
+        Assert.Equal(150.25m, message.TriggerPrice);
+        Assert.Equal(saved.TriggeredAt, message.TriggeredAt);
+    }
+
+    [Fact]
+    public async Task One_event_per_triggered_alert_and_none_for_the_rest()
+    {
+        var hitA = await SeedAlertAsync("AAPL", AlertDirection.Above, 100m);
+        var hitB = await SeedAlertAsync("AAPL", AlertDirection.Below, 200m);
+        await SeedAlertAsync("AAPL", AlertDirection.Above, 500m);
+        await SeedAlertAsync("AAPL", AlertDirection.Above, 50m, isTriggered: true,
+            triggeredAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        await EvaluateAsync("AAPL", 150m);
+
+        await using var db = NewDbContext();
+        var alertIds = (await db.OutboxMessages.ToListAsync())
+            .Select(e => JsonSerializer.Deserialize<AlertTriggeredMessage>(e.Payload)!.AlertId)
+            .Order()
+            .ToList();
+
+        Assert.Equal(new[] { hitA.Id, hitB.Id }.Order(), alertIds);
     }
 
     [Fact]

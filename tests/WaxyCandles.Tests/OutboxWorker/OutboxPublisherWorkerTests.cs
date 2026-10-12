@@ -1,7 +1,9 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using WaxyCandles.Application.Alerts.Messages;
 using WaxyCandles.Application.MarketData.Messages;
 using WaxyCandles.Domain.Entities;
+using WaxyCandles.Infrastructure.Messaging;
 using WaxyCandles.OutboxWorker;
 using WaxyCandles.Tests.Infrastructure;
 using static WaxyCandles.Tests.Infrastructure.RabbitMqTestBroker;
@@ -174,6 +176,39 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
             "A backlog of full batches should not wait a poll interval between them.");
         Assert.Equal(45, (await DrainPayloadsAsync()).Count);
     }
+    [Fact]
+    public async Task Alert_triggered_events_are_routed_to_their_own_queue()
+    {
+        var price = await SeedOutboxAsync(T0, "AAPL");
+        var alert = await SeedRawOutboxAsync(
+            nameof(AlertTriggeredMessage),
+            """{ "MessageId": "6a0c1d0e-0000-4000-8000-000000000001", "Symbol": "AAPL" }""",
+            T0.AddSeconds(1));
+
+        await StartWorkerAsync();
+        await WaitUntilAllProcessedAsync();
+
+        Assert.Equal([price.Payload], await DrainPayloadsAsync(MainQueue));
+        Assert.Equal([alert.Payload], await DrainPayloadsAsync(QueueTopology.AlertTriggered.Queue));
+    }
+
+    [Fact]
+    public async Task Row_with_an_unrouted_type_stays_pending_and_does_not_block_others()
+    {
+        // Older than every routable row, so it would be first in line.
+        var unknown = await SeedRawOutboxAsync("SomethingNobodyRoutes", "{}", T0);
+        var price = await SeedOutboxAsync(T0.AddSeconds(1), "AAPL");
+
+        await StartWorkerAsync();
+        await WaitUntilProcessedAsync(price.Id);
+
+        Assert.Equal([price.Payload], await DrainPayloadsAsync());
+        Assert.True(_logs.Contains("have a type with no route"));
+
+        await using var db = NewDbContext();
+        Assert.Null((await db.OutboxMessages.SingleAsync(m => m.Id == unknown.Id)).ProcessedAt);
+    }
+
     private async Task StartWorkerAsync() =>
         await _workers.StartAsync<OutboxPublisherWorker>(
             Fixture.BuildServices(ConnectionString, loggerProvider: _logs));
@@ -189,17 +224,50 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
             PublishTimeout,
             "all outbox messages to be marked processed");
 
-    private async Task<List<string>> DrainPayloadsAsync()
+    private Task<List<string>> DrainPayloadsAsync() => DrainPayloadsAsync(MainQueue);
+
+    private async Task<List<string>> DrainPayloadsAsync(string queue)
     {
         var payloads = new List<string>();
 
-        while (await _broker.GetAsync(MainQueue) is { } result)
+        while (await _broker.GetAsync(queue) is { } result)
         {
             payloads.Add(Encoding.UTF8.GetString(result.Body.Span));
         }
 
         return payloads;
     }
+
+    private async Task<OutboxMessage> SeedRawOutboxAsync(
+        string type,
+        string payload,
+        DateTimeOffset createdAt)
+    {
+        var entry = new OutboxMessage
+        {
+            Id = Guid.NewGuid(),
+            Type = type,
+            Payload = payload,
+            CreatedAt = createdAt
+        };
+
+        await using var db = NewDbContext();
+        db.OutboxMessages.Add(entry);
+        await db.SaveChangesAsync();
+
+        return entry;
+    }
+
+    private Task WaitUntilProcessedAsync(Guid outboxId) =>
+        Eventually.TrueAsync(
+            async () =>
+            {
+                await using var db = NewDbContext();
+                return await db.OutboxMessages.AnyAsync(
+                    m => m.Id == outboxId && m.ProcessedAt != null);
+            },
+            PublishTimeout,
+            $"outbox message {outboxId} to be marked processed");
 
     private async Task<OutboxMessage> SeedOutboxAsync(
         DateTimeOffset createdAt,

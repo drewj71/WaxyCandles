@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using WaxyCandles.Application.Alerts.Messages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WaxyCandles.AlertWorker;
@@ -110,6 +112,55 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
 
         await using var db = NewDbContext();
         Assert.Equal(1, await db.ProcessedMessages.CountAsync(m => m.Id == message.MessageId));
+    }
+
+    [Fact]
+    public async Task Failure_after_evaluation_rolls_back_the_alert_and_its_event()
+    {
+        // Attempt 1 evaluates (saving the triggered alert and its AlertTriggered
+        // outbox event inside the transaction), then fails before the commit.
+        var uncommittedEventCount = new TaskCompletionSource<int>();
+
+        _probe.AfterEvaluate = async attempt =>
+        {
+            if (attempt != 1)
+            {
+                return;
+            }
+
+            // Peek at the transaction's uncommitted writes from outside it (NOLOCK),
+            // to prove the event really was written before the rollback.
+            await using var db = NewDbContext();
+            var uncommittedEvents = await db.OutboxMessages
+                .FromSqlRaw("SELECT * FROM OutboxMessages WITH (NOLOCK)")
+                .CountAsync(m => m.Type == nameof(AlertTriggeredMessage));
+
+            uncommittedEventCount.SetResult(uncommittedEvents);
+            throw new InvalidOperationException("Simulated failure after evaluating");
+        };
+
+        var alertId = await SeedAlertAsync("AAPL", AlertDirection.Above, 100m);
+        await StartConsumerAsync();
+
+        var message = NewMessage("AAPL", 150m);
+        await _broker.PublishAsync(message);
+
+        // Sanity check: the failed attempt really had written the event.
+        Assert.Equal(1, await uncommittedEventCount.Task.WaitAsync(MessagingTimeout));
+
+        await WaitUntilProcessedAsync(message.MessageId);
+
+        await using var verifyDb = NewDbContext();
+        Assert.True((await verifyDb.Alerts.SingleAsync(a => a.Id == alertId)).IsTriggered);
+
+        // Only the successful attempt's event survives.
+        var events = await verifyDb.OutboxMessages
+            .Where(m => m.Type == nameof(AlertTriggeredMessage))
+            .ToListAsync();
+
+        var only = Assert.Single(events);
+        Assert.Equal(alertId, JsonSerializer.Deserialize<AlertTriggeredMessage>(only.Payload)!.AlertId);
+        Assert.Equal(2, _probe.Calls.Count);
     }
 
     [Fact]

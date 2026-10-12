@@ -19,6 +19,7 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
     public DbSet<OutboxMessage> OutboxMessages { get; set; }
     public DbSet<StockCandle> StockCandles { get; set; }
+    public DbSet<Notification> Notifications => Set<Notification>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -56,6 +57,32 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
                 x.Timestamp
             })
             .IsUnique();
+
+        builder.Entity<Notification>(entity =>
+        {
+            entity.Property(x => x.UserId)
+                .IsRequired();
+
+            entity.Property(x => x.Title)
+                .HasMaxLength(200)
+                .IsRequired();
+
+            entity.Property(x => x.Body)
+                .HasMaxLength(1000)
+                .IsRequired();
+
+            // Makes creating a notification from a message idempotent.
+            entity.HasIndex(x => x.SourceMessageId)
+                .IsUnique();
+
+            // A user's most recent notifications.
+            entity.HasIndex(x => new { x.UserId, x.CreatedAt });
+
+            entity.HasOne<ApplicationUser>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
         builder.Entity<RefreshToken>(entity =>
         {

@@ -1,6 +1,6 @@
 using System.Text;
 using RabbitMQ.Client;
-using WaxyCandles.AlertWorker;
+using WaxyCandles.Infrastructure.Messaging;
 
 namespace WaxyCandles.Tests.AlertWorker;
 
@@ -9,7 +9,7 @@ public class RetryCountHeaderTests
     [Fact]
     public void Missing_properties_means_first_attempt()
     {
-        Assert.Equal(0, StockPriceConsumer.GetRetryCount(null));
+        Assert.Equal(0, RetryHeaders.GetRetryCount(null));
     }
 
     [Fact]
@@ -17,7 +17,7 @@ public class RetryCountHeaderTests
     {
         var properties = new BasicProperties();
 
-        Assert.Equal(0, StockPriceConsumer.GetRetryCount(properties));
+        Assert.Equal(0, RetryHeaders.GetRetryCount(properties));
     }
 
     [Fact]
@@ -25,7 +25,7 @@ public class RetryCountHeaderTests
     {
         var properties = WithHeader("some-other-header", Encoding.UTF8.GetBytes("5"));
 
-        Assert.Equal(0, StockPriceConsumer.GetRetryCount(properties));
+        Assert.Equal(0, RetryHeaders.GetRetryCount(properties));
     }
 
     [Theory]
@@ -38,7 +38,7 @@ public class RetryCountHeaderTests
         // the consumer writes x-retry-count when republishing to the retry queue.
         var properties = WithHeader("x-retry-count", Encoding.UTF8.GetBytes(headerValue));
 
-        Assert.Equal(expected, StockPriceConsumer.GetRetryCount(properties));
+        Assert.Equal(expected, RetryHeaders.GetRetryCount(properties));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class RetryCountHeaderTests
     {
         var properties = WithHeader("x-retry-count", Encoding.UTF8.GetBytes("abc"));
 
-        Assert.Equal(0, StockPriceConsumer.GetRetryCount(properties));
+        Assert.Equal(0, RetryHeaders.GetRetryCount(properties));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class RetryCountHeaderTests
         // an AMQP integer would have it treated as a first attempt.
         var properties = WithHeader("x-retry-count", 2);
 
-        Assert.Equal(0, StockPriceConsumer.GetRetryCount(properties));
+        Assert.Equal(0, RetryHeaders.GetRetryCount(properties));
     }
 
     private static BasicProperties WithHeader(string key, object value) =>

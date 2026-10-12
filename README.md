@@ -195,6 +195,27 @@ Direction: Above
 
 When a market-price update is received, the Alert Worker evaluates matching untriggered alerts.
 
+## Alert Notifications
+
+When an alert triggers, its owner is notified in the app:
+
+```text
+Alert Worker  -> alert marked triggered + AlertTriggered event (outbox, same transaction)
+Outbox Worker -> "alert-triggered" queue
+API           -> stores a notification, pushes it live over SignalR
+Browser       -> toast + unread badge on the notification bell
+```
+
+* Notifications are stored, so anything missed while offline appears on the next visit.
+* The live push uses SignalR at `/hubs/notifications`, authenticated with the same cookie as the REST API.
+* The `alert-triggered` queue has the same retry and dead-letter handling as price updates, and creating a notification is idempotent per message.
+
+```http
+GET  /api/notifications               # 20 most recent + unread count
+POST /api/notifications/{id}/read
+POST /api/notifications/read-all
+```
+
 ---
 
 # Watchlists
@@ -597,6 +618,7 @@ All protected endpoints require authentication.
 * [x] Retry queues
 * [x] Dead-letter queues
 * [x] Message idempotency
+* [x] In-app alert notifications (SignalR)
 
 ### In Progress / Planned
 

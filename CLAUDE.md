@@ -73,15 +73,21 @@ Market data access is abstracted behind `IMarketDataProvider` (Application layer
 
 ### Async pipeline (Outbox pattern)
 
-Price updates and alert evaluation are decoupled via RabbitMQ and the Outbox pattern:
+Price updates, alert evaluation and notifications are decoupled via RabbitMQ and the Outbox pattern:
 
 ```
 Price Polling Worker -> writes StockPrice + OutboxMessage (same DB transaction)
-  -> Outbox Worker reads unprocessed OutboxMessages -> publishes to RabbitMQ
-    -> Alert Worker consumes "stock-price-updated" -> evaluates matching alerts
+  -> Outbox Worker publishes each OutboxMessage to the queue for its Type (MessageRoutes)
+    -> Alert Worker consumes "stock-price-updated" -> evaluates alerts; a triggered alert
+       writes an AlertTriggeredMessage OutboxMessage in the same transaction
+      -> Outbox Worker -> "alert-triggered"
+        -> API (hosted AlertTriggeredConsumer) stores a Notification, pushes it over SignalR
 ```
 
-Failed messages go through a retry queue (`stock-price-retry`, 5s TTL) before landing in a dead-letter queue (`stock-price-dead-letter`) after repeated failures. The Alert Worker tracks `ProcessedMessage` IDs to guarantee idempotent (at-least-once-safe) consumption — check this when touching any consumer logic.
+- Each queue's topology (queue, `<name>-retry` with 5s TTL, `-dlx`/`-dead-letter`) is defined once in `QueueTopology` (Infrastructure/Messaging); producers and consumers both declare it with identical arguments. Add a new message type by adding a topology and a `MessageRoutes` entry. The outbox leaves rows of unrouted types pending.
+- Consumers derive from `RabbitMqConsumer<TMessage>`, which owns transport concerns: reconnect loop, publisher-confirmed mandatory retry/dead-letter publishes, requeue safety net, unreadable payloads straight to the dead-letter queue, 3 attempts total. Subclasses implement `IsValid` and `ProcessAsync` and are responsible for idempotency.
+- Idempotency: `StockPriceConsumer` claims a `ProcessedMessage` row inside the transaction that evaluates alerts; `AlertTriggeredConsumer` relies on the unique `Notification.SourceMessageId`. Check this when touching any consumer logic.
+- The SignalR push (`/hubs/notifications`, cookie-authenticated) only reaches clients on the API instance that consumed the message; more than one API instance would need a SignalR backplane.
 
 ### Frontend: TanStack Router/Query, mid-migration
 

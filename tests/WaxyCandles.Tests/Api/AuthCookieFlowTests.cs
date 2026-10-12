@@ -25,7 +25,8 @@ public class AuthCookieFlowTests(IntegrationFixture fixture) : ApiTestBase(fixtu
         "/api/alerts",
         "/api/watchlist",
         "/api/watchlist/quotes",
-        "/api/stocks/AAPL"
+        "/api/stocks/AAPL",
+        "/api/notifications"
     ];
 
     [Theory]

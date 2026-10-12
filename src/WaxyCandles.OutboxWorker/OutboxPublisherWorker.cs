@@ -95,7 +95,7 @@ public class OutboxPublisherWorker : BackgroundService
                 catch (PublishReturnException ex)
                 {
                     // Unroutable, e.g. the queue was deleted. The channel is still
-                    // open; redeclare the queue on the next poll.
+                    // open; redeclare the queues on the next poll.
                     _logger.LogError(
                         ex,
                         "Error while publishing outbox messages.");
@@ -131,21 +131,16 @@ public class OutboxPublisherWorker : BackgroundService
         }
     }
 
+    // Declares the full topology of every route (same arguments as the
+    // consumers), so messages are deliverable even before a consumer has run.
     private static async Task DeclareQueueAsync(
         IChannel channel,
         CancellationToken stoppingToken)
     {
-        await channel.QueueDeclareAsync(
-            queue: "stock-price-updated",
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: new Dictionary<string, object?>
-            {
-                ["x-dead-letter-exchange"] = "stock-price-retry",
-                ["x-dead-letter-routing-key"] = "retry"
-            },
-            cancellationToken: stoppingToken);
+        foreach (var topology in MessageRoutes.ByMessageType.Values.Distinct())
+        {
+            await topology.DeclareAsync(channel, stoppingToken);
+        }
     }
 
     /// <summary>Publishes the oldest pending messages. Returns how many were published.</summary>
@@ -160,9 +155,29 @@ public class OutboxPublisherWorker : BackgroundService
             scope.ServiceProvider
                 .GetRequiredService<AppDbContext>();
 
+        var routedTypes = MessageRoutes.ByMessageType.Keys.ToList();
+
+        // Rows of a type with no route are left pending (never marked
+        // processed) and excluded here, so they can't block the rows behind them.
+        var unroutable =
+            await dbContext.OutboxMessages
+                .CountAsync(
+                    x => x.ProcessedAt == null &&
+                         !routedTypes.Contains(x.Type),
+                    stoppingToken);
+
+        if (unroutable > 0)
+        {
+            _logger.LogError(
+                "{Count} pending outbox message(s) have a type with no route in MessageRoutes; they will not be published.",
+                unroutable);
+        }
+
         var messages =
             await dbContext.OutboxMessages
-                .Where(x => x.ProcessedAt == null)
+                .Where(x =>
+                    x.ProcessedAt == null &&
+                    routedTypes.Contains(x.Type))
                 .OrderBy(x => x.CreatedAt)
                 .Take(BatchSize)
                 .ToListAsync(stoppingToken);
@@ -173,6 +188,8 @@ public class OutboxPublisherWorker : BackgroundService
         {
             foreach (var message in messages)
             {
+                var topology = MessageRoutes.ByMessageType[message.Type];
+
                 var body =
                     Encoding.UTF8.GetBytes(
                         message.Payload);
@@ -190,7 +207,7 @@ public class OutboxPublisherWorker : BackgroundService
                 // deleted) fails the publish instead of being dropped.
                 await channel.BasicPublishAsync(
                     exchange: string.Empty,
-                    routingKey: "stock-price-updated",
+                    routingKey: topology.Queue,
                     mandatory: true,
                     basicProperties: properties,
                     body: body,

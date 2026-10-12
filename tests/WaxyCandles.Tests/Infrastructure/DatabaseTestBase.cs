@@ -1,3 +1,4 @@
+using WaxyCandles.Infrastructure.Identity;
 using WaxyCandles.Infrastructure.Persistence;
 
 namespace WaxyCandles.Tests.Infrastructure;
@@ -30,4 +31,26 @@ public abstract class DatabaseTestBase : IAsyncLifetime
     /// </summary>
     protected AppDbContext NewDbContext() =>
         IntegrationFixture.CreateDbContext(ConnectionString);
+
+    /// <summary>
+    /// Inserts a bare user row, for data with a foreign key to AspNetUsers
+    /// (e.g. notifications). Not a usable login; register through the API for that.
+    /// </summary>
+    protected async Task<string> SeedUserAsync(string email = "user@example.com")
+    {
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid().ToString(),
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant()
+        };
+
+        await using var db = NewDbContext();
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        return user.Id;
+    }
 }

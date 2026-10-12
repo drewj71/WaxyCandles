@@ -16,6 +16,8 @@ using WaxyCandles.Infrastructure.MarketData;
 using WaxyCandles.Infrastructure.Messaging;
 using WaxyCandles.Infrastructure.Watchlists;
 using WaxyCandles.Application.Watchlists.Interfaces;
+using WaxyCandles.Application.Notifications.Interfaces;
+using WaxyCandles.Infrastructure.Notifications;
 
 namespace WaxyCandles.Infrastructure;
 
@@ -37,6 +39,7 @@ public static class DependencyInjection
         services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
         services.AddScoped<IHistoricalMarketDataService, HistoricalMarketDataService>();
         services.AddScoped<IWatchlistService, WatchlistService>();
+        services.AddScoped<INotificationService, NotificationService>();
 
         services.AddHttpClient<
             IMarketDataProvider,

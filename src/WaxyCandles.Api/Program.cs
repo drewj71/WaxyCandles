@@ -2,6 +2,9 @@ using WaxyCandles.Infrastructure;
 using WaxyCandles.Api.Middleware;
 using Microsoft.OpenApi.Models;
 using System.Text.Json.Serialization;
+using WaxyCandles.Api.Hubs;
+using WaxyCandles.Application.Notifications.Interfaces;
+using WaxyCandles.Infrastructure.Notifications;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,7 +16,19 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter());
     });
-    
+
+// Live notifications: the hub, the IRealtimeNotifier that pushes through it, and
+// the consumer that turns AlertTriggered messages into stored, pushed
+// notifications. It runs here because this is where clients are connected.
+builder.Services.AddSignalR()
+    .AddJsonProtocol(options =>
+    {
+        options.PayloadSerializerOptions.Converters.Add(
+            new JsonStringEnumConverter());
+    });
+builder.Services.AddSingleton<IRealtimeNotifier, SignalRNotifier>();
+builder.Services.AddHostedService<AlertTriggeredConsumer>();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
@@ -73,5 +88,6 @@ app.UseCors("Frontend");
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<NotificationsHub>(NotificationsHub.Path);
 
 app.Run();
