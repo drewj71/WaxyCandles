@@ -5,6 +5,7 @@ import {
     HistogramSeries,
     type IChartApi,
     type ISeriesApi,
+    type UTCTimestamp,
 } from "lightweight-charts";
 
 type Candle = {
@@ -167,7 +168,7 @@ function StockCandlestickChart({
             time: Math.floor(
                 new Date(candle.timestamp).getTime() /
                 1000,
-            ) as any,
+            ) as UTCTimestamp,
 
             open: candle.open,
             high: candle.high,
@@ -179,7 +180,7 @@ function StockCandlestickChart({
             time: Math.floor(
                 new Date(candle.timestamp).getTime() /
                 1000,
-            ) as any,
+            ) as UTCTimestamp,
 
             value: candle.volume,
 
