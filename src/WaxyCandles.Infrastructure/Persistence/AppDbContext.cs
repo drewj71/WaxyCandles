@@ -20,6 +20,18 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<OutboxMessage> OutboxMessages { get; set; }
     public DbSet<StockCandle> StockCandles { get; set; }
 
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        base.ConfigureConventions(configurationBuilder);
+
+        // SQL Server's default decimal(18,2) silently truncates prices and
+        // percentages (Alpha Vantage sends 4 decimals, e.g. "0.8119%", and alert
+        // targets can be sub-penny). Applies to every decimal, including new ones.
+        configurationBuilder
+            .Properties<decimal>()
+            .HavePrecision(18, 6);
+    }
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
