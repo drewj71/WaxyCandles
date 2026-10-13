@@ -28,12 +28,14 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
     protected override Guid GetMessageId(StockPriceUpdatedMessage message) =>
         message.MessageId;
 
-    // A missing Price deserializes to 0, which would trigger every
-    // "Below" alert on the symbol, so it counts as unreadable too.
+    // A missing Price deserializes to 0, which would trigger every "Below"
+    // alert on the symbol, and a missing Timestamp would defeat the guard
+    // against out-of-order prices, so both count as unreadable.
     protected override bool IsValid(StockPriceUpdatedMessage message) =>
         message.MessageId != Guid.Empty &&
         !string.IsNullOrWhiteSpace(message.Symbol) &&
-        message.Price > 0;
+        message.Price > 0 &&
+        message.Timestamp != default;
 
     protected override async Task<ConsumeOutcome> ProcessAsync(
         StockPriceUpdatedMessage message,
@@ -95,6 +97,7 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
         await alertEvaluationService.EvaluateAsync(
             message.Symbol,
             message.Price,
+            message.Timestamp,
             cancellationToken);
 
         await transaction.CommitAsync(

@@ -236,7 +236,9 @@ public class StockPriceConsumerTests(IntegrationFixture fixture)
         """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e01", "Symbol": " ", "Price": 1 }""",
         // A missing or zero price would otherwise trigger every "Below" alert.
         """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e02", "Symbol": "AAPL" }""",
-        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e03", "Symbol": "AAPL", "Price": 0 }"""
+        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e03", "Symbol": "AAPL", "Price": 0 }""",
+        // Without an observation time, out-of-order prices can't be detected.
+        """{ "MessageId": "8d3c6a52-6f4e-4a8b-9a3e-2f1c5b7d9e04", "Symbol": "AAPL", "Price": 150 }"""
     ];
 
     [Theory]

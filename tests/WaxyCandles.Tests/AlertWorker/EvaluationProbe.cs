@@ -48,10 +48,11 @@ public sealed class ProbingAlertEvaluationService(
     public async Task EvaluateAsync(
         string symbol,
         decimal price,
+        DateTimeOffset? observedAt = null,
         CancellationToken cancellationToken = default)
     {
         await probe.OnEvaluateAsync(symbol);
-        await inner.EvaluateAsync(symbol, price, cancellationToken);
+        await inner.EvaluateAsync(symbol, price, observedAt, cancellationToken);
         await probe.OnEvaluatedAsync();
     }
 }

@@ -27,6 +27,21 @@ public class DecimalPrecisionModelTests
     }
 }
 
+public class AlertIndexModelTests
+{
+    [Fact]
+    public void Alerts_are_indexed_by_symbol_for_evaluation()
+    {
+        using var db = IntegrationFixture.CreateDbContext("Server=unused;Database=unused");
+
+        var alert = db.Model.FindEntityType(typeof(Alert))!;
+
+        Assert.Contains(
+            alert.GetIndexes(),
+            i => i.Properties.Select(p => p.Name).SequenceEqual([nameof(Alert.Symbol)]));
+    }
+}
+
 /// <summary>
 /// Values with more than two decimals must survive a round trip through SQL Server.
 /// </summary>

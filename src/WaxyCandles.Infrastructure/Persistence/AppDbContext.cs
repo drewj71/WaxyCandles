@@ -46,6 +46,12 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<Alert>()
             .HasIndex(x => new { x.UserId, x.Symbol });
 
+        // Evaluation looks alerts up by symbol for every price update. Without
+        // this it scans the table, and under locking READ COMMITTED that scan
+        // waits on every other transaction's uncommitted alert writes.
+        builder.Entity<Alert>()
+            .HasIndex(x => x.Symbol);
+
         builder.Entity<Watchlist>()
             .HasIndex(x => new { x.UserId, x.Symbol }).IsUnique();
 

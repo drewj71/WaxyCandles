@@ -182,6 +182,9 @@ namespace WaxyCandles.Infrastructure.Migrations
                     b.Property<bool>("IsTriggered")
                         .HasColumnType("bit");
 
+                    b.Property<DateTimeOffset?>("StateChangedAt")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<string>("Symbol")
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
@@ -201,6 +204,8 @@ namespace WaxyCandles.Infrastructure.Migrations
                         .HasColumnType("nvarchar(450)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Symbol");
 
                     b.HasIndex("UserId", "Symbol");
 

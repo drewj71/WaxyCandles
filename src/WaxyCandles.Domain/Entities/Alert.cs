@@ -39,6 +39,14 @@ public class Alert
 
     public int TriggerCount { get; set; }
 
+    /// <summary>
+    /// When the alert's state last changed: the observation time of the price
+    /// that fired or re-armed it, or the time an edit re-armed it. A price
+    /// observed before this can't change the state again, so prices evaluated
+    /// out of order can't re-arm or fire it twice for one crossing.
+    /// </summary>
+    public DateTimeOffset? StateChangedAt { get; set; }
+
     public bool IsConditionMet(decimal price) => Direction switch
     {
         AlertDirection.Above => price >= TargetPrice,

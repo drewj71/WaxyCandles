@@ -112,6 +112,16 @@ public class AlertService : IAlertService
         if (conditionChanged)
         {
             alert.IsTriggered = false;
+
+            // Always write it: EF only writes properties that differ from what it
+            // loaded, so if the worker fired the alert after we loaded it (false),
+            // setting false again would be skipped and the alert left triggered
+            // for a target it never reached.
+            _dbContext.Entry(alert).Property(a => a.IsTriggered).IsModified = true;
+
+            // Prices observed before this edit belong to the old condition and
+            // must not fire or re-arm the edited alert.
+            alert.StateChangedAt = now;
         }
 
         await _dbContext.SaveChangesAsync();
