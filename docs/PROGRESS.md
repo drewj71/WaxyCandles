@@ -5,21 +5,33 @@ Update this at the end of each working session.
 
 ## Next up
 
-- [ ] **Merge `fix/alert-lifecycle-races`** into `master` (only unmerged branch; 1 commit ahead).
-- [ ] **Schwab market data provider** — developer account applied for, access **pending** (as of 2026-10-14).
-  Open questions to settle once access arrives:
+- [ ] **Try MarketData.app end to end** with the trial key (30-day trial, started 2026-10-14):
+  set `MarketDataApp:ApiToken` in user secrets for the API and PricePollingWorker, run a history
+  import and a polling cycle. Confirm whether API stock quotes are 15-min delayed on our plan.
+- [ ] **Options data** via MarketData.app: separate `IOptionsDataProvider` (not a bigger
+  `IMarketDataProvider`). Filter chains by strike/expiration, as each contract returned costs a credit.
+- [ ] Batch quote requests in `MarketDataService` (MarketData.app takes many symbols per call
+  at the same credit cost) if the watched symbol count grows.
+- [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
+  Most likely role: real-time quotes for alerts if MarketData.app quotes turn out to be delayed.
+  Open questions:
   - OAuth 2.0 with browser login: ~30 min access tokens, ~7 day refresh tokens, so weekly manual
     re-auth. Need a token store and a re-auth story for the headless `PricePollingWorker`.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
-  - Whether Schwab replaces Alpha Vantage or sits alongside it (e.g. live quotes vs. history).
-- [ ] Prep work that doesn't need Schwab access: config-driven provider selection
-  (e.g. `MarketData:Provider`) behind `IMarketDataProvider`.
 
 ## Log
 
 ### 2026-10-14
 - Started this progress log. Context from earlier sessions wasn't saved, so the history
   below is reconstructed from git.
+- `fix/alert-lifecycle-races` merged to `master`.
+- Evaluated MarketData.app: good for candles and options (chains, IV, Greeks). Caveats: API
+  stock quotes are 15-min delayed on self-serve plans, internal-use licence only, one IP per
+  account, option chains cost 1 credit per contract.
+- Added `MarketDataAppMarketDataProvider` and config-driven provider selection
+  (`MarketData:Provider` = `MarketDataApp` | `AlphaVantage`, unset → Alpha Vantage)
+  on `feat/marketdata-app-provider`. Token in `MarketDataApp:ApiToken` (Bearer header);
+  Docker uses `MARKETDATA_API_TOKEN`. Unit tests for parsing, errors and provider selection.
 
 ### 2026-10-13
 - Closed races between alert evaluation, alert edits and out-of-order prices

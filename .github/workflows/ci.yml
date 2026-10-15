@@ -82,7 +82,7 @@ jobs:
     env:
       MSSQL_SA_PASSWORD: ci-build-only
       JWT_SECRET: ci-build-only
-      ALPHAVANTAGE_API_KEY: ci-build-only
+      MARKETDATA_API_TOKEN: ci-build-only
     steps:
       - uses: actions/checkout@v7
 

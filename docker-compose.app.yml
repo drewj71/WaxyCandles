@@ -8,7 +8,10 @@
 #                         SQL Server's complexity rules; avoid ";" (it goes into a
 #                         connection string).
 #   JWT_SECRET            API signing key, a long random string (32+ characters).
-#   ALPHAVANTAGE_API_KEY  for the price polling worker.
+#   MARKETDATA_API_TOKEN  Market Data (marketdata.app) token, for the API's history
+#                         import and the price polling worker.
+#   MARKET_DATA_PROVIDER  optional, "MarketDataApp" (default) or "AlphaVantage".
+#   ALPHAVANTAGE_API_KEY  only needed when MARKET_DATA_PROVIDER=AlphaVantage.
 #   JWT_ISSUER, JWT_AUDIENCE  optional, default "WaxyCandles".
 # Compose stops with "Set <NAME> in .env" if a required one is missing.
 #
@@ -32,6 +35,12 @@ x-jwt: &jwt
   Jwt__Secret: ${JWT_SECRET:?Set JWT_SECRET in .env}
   Jwt__Issuer: ${JWT_ISSUER:-WaxyCandles}
   Jwt__Audience: ${JWT_AUDIENCE:-WaxyCandles}
+
+# Used by the API (history import) and the price polling worker.
+x-market-data: &market-data
+  MarketData__Provider: ${MARKET_DATA_PROVIDER:-MarketDataApp}
+  MarketDataApp__ApiToken: ${MARKETDATA_API_TOKEN:?Set MARKETDATA_API_TOKEN in .env}
+  AlphaVantage__ApiKey: ${ALPHAVANTAGE_API_KEY:-}
 
 x-dotnet-service: &dotnet-service
   restart: unless-stopped
@@ -81,7 +90,7 @@ services:
         PROJECT: WaxyCandles.Api
     container_name: waxycandles-api
     environment:
-      <<: [*database, *messaging, *jwt]
+      <<: [*database, *messaging, *jwt, *market-data]
     ports:
       - "5148:8080"
 
@@ -94,8 +103,7 @@ services:
         PROJECT: WaxyCandles.PricePollingWorker
     container_name: waxycandles-price-polling-worker
     environment:
-      <<: [*database, *messaging]
-      AlphaVantage__ApiKey: ${ALPHAVANTAGE_API_KEY:?Set ALPHAVANTAGE_API_KEY in .env}
+      <<: [*database, *messaging, *market-data]
 
   outbox-worker:
     <<: *dotnet-service

@@ -126,6 +126,7 @@ Consumes market-price messages from RabbitMQ and evaluates matching user alerts.
 
 ### Market Data
 
+* Market Data (marketdata.app)
 * Alpha Vantage
 * Historical OHLCV data
 * Current stock quotes
@@ -276,7 +277,7 @@ Supported candle intervals are:
 1 day
 ```
 
-The current Alpha Vantage integration provides daily historical data. Intraday intervals are modeled in the application so additional market-data providers can be integrated later.
+Both providers supply daily and intraday (5/15/30-minute and hourly) candles. A Market Data import fetches the last year of daily candles or the last 30 days of intraday candles.
 
 Historical data is exposed through:
 
@@ -436,8 +437,8 @@ IMarketDataProvider
      │
 Infrastructure
      │
-     ├── AlphaVantageMarketDataProvider
-     └── Future providers
+     ├── MarketDataAppMarketDataProvider
+     └── AlphaVantageMarketDataProvider
 ```
 
 This allows the application to change market-data vendors without changing controllers or business logic.
@@ -475,7 +476,7 @@ EF Core migrations are committed to source control so the database schema can be
 * SQL Server
 * Docker Desktop
 * RabbitMQ
-* Alpha Vantage API key
+* Market Data (marketdata.app) API token, or an Alpha Vantage API key
 
 RabbitMQ can be started using Docker Compose.
 
@@ -503,10 +504,15 @@ Then provide your own API keys and local configuration.
 
 Example:
 
+`MarketData:Provider` selects the market data vendor: `MarketDataApp` or `AlphaVantage`.
+
 ```json
 {
-  "AlphaVantage": {
-    "ApiKey": "YOUR_ALPHA_VANTAGE_API_KEY"
+  "MarketData": {
+    "Provider": "MarketDataApp"
+  },
+  "MarketDataApp": {
+    "ApiToken": "YOUR_MARKET_DATA_API_TOKEN"
   },
   "ConnectionStrings": {
     "DefaultConnection": "Server=localhost;Database=WaxyCandles;Trusted_Connection=True;TrustServerCertificate=True;"
@@ -530,7 +536,8 @@ Create a git-ignored `.env` file in the repository root:
 ```bash
 MSSQL_SA_PASSWORD=   # sa password for the containerised SQL Server (SQL Server complexity rules; no ";")
 JWT_SECRET=          # long random string, 32+ characters
-ALPHAVANTAGE_API_KEY=
+MARKETDATA_API_TOKEN=
+# Optional: MARKET_DATA_PROVIDER=AlphaVantage (default MarketDataApp) plus ALPHAVANTAGE_API_KEY=
 ```
 
 Then:

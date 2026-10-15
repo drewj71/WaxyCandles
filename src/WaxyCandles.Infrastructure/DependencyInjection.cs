@@ -40,9 +40,38 @@ public static class DependencyInjection
         services.AddScoped<IWatchlistService, WatchlistService>();
         services.AddScoped<INotificationService, NotificationService>();
 
-        services.AddHttpClient<
-            IMarketDataProvider,
-            AlphaVantageMarketDataProvider>();
+        services.AddMarketDataProvider(configuration);
+
+        return services;
+    }
+
+    // MarketData:Provider picks the vendor; unset means Alpha Vantage, which
+    // keeps workers that never fetch market data free of provider config.
+    private static IServiceCollection AddMarketDataProvider(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var provider = configuration["MarketData:Provider"];
+
+        switch (provider)
+        {
+            case null or "" or "AlphaVantage":
+                services.AddHttpClient<
+                    IMarketDataProvider,
+                    AlphaVantageMarketDataProvider>();
+                break;
+
+            case "MarketDataApp":
+                services.AddHttpClient<
+                    IMarketDataProvider,
+                    MarketDataAppMarketDataProvider>();
+                break;
+
+            default:
+                throw new InvalidOperationException(
+                    $"Unknown MarketData:Provider \"{provider}\". " +
+                    "Expected \"AlphaVantage\" or \"MarketDataApp\".");
+        }
 
         return services;
     }

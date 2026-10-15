@@ -48,7 +48,8 @@ Secrets are NOT stored in appsettings files. In Development they come from `dotn
 | Key | Used by |
 |---|---|
 | `Jwt:Secret` | API only |
-| `AlphaVantage:ApiKey` | PricePollingWorker |
+| `MarketDataApp:ApiToken` | API (history import) and PricePollingWorker |
+| `AlphaVantage:ApiKey` | API and PricePollingWorker, only when `MarketData:Provider` is `AlphaVantage` |
 | `ConnectionStrings:DefaultConnection` | API and all workers |
 
 - `appsettings.json` holds structure and non-secret values only (e.g. RabbitMQ host `localhost`). Secret keys are present but blank.
@@ -69,7 +70,7 @@ Projects under `src/` follow a clean/onion architecture:
 - **WaxyCandles.Api** — ASP.NET Core Web API; thin controllers (`Controllers/`) that call into Application services. JWT bearer auth, Swagger/OpenAPI, CORS locked to the Vite dev origin.
 - **WaxyCandles.PricePollingWorker / AlertWorker / OutboxWorker** — standalone background-service executables, each with their own `appsettings*.json`.
 
-Market data access is abstracted behind `IMarketDataProvider` (Application layer) so vendors (currently Alpha Vantage) can be swapped without touching controllers or business logic.
+Market data access is abstracted behind `IMarketDataProvider` (Application layer) so vendors can be swapped without touching controllers or business logic. The non-secret `MarketData:Provider` setting picks one: `MarketDataApp` (marketdata.app, set in the API and PricePollingWorker appsettings and the default in Docker) or `AlphaVantage` (the fallback when unset). Both providers store daily candles at UTC midnight of the trading date, so candle dedup holds across a switch.
 
 ### Async pipeline (Outbox pattern)
 
