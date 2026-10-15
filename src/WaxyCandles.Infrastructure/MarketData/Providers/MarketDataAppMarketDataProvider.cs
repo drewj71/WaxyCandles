@@ -40,8 +40,12 @@ public class MarketDataAppMarketDataProvider : IMarketDataProvider
         var normalizedSymbol =
             symbol.Trim().ToUpperInvariant();
 
+        // stocks/prices, not stocks/quotes: quotes are delayed or a day old unless
+        // the account has the exchange agreements, while prices are real-time on
+        // every plan. The price is a SmartMid (bid/ask midpoint), not the last
+        // trade, and the response has no volume.
         using var document = await GetAsync(
-            $"{BaseUrl}/stocks/quotes/{Uri.EscapeDataString(normalizedSymbol)}/",
+            $"{BaseUrl}/stocks/prices/{Uri.EscapeDataString(normalizedSymbol)}/",
             cancellationToken);
 
         // Unknown symbol: HTTP 404 or s = "no_data".
@@ -52,7 +56,7 @@ public class MarketDataAppMarketDataProvider : IMarketDataProvider
 
         var root = document.RootElement;
 
-        var price = First(root, "last").GetDecimal();
+        var price = First(root, "mid").GetDecimal();
         var change = First(root, "change").GetDecimal();
 
         return new MarketQuote
@@ -63,7 +67,6 @@ public class MarketDataAppMarketDataProvider : IMarketDataProvider
             Change = change,
             // Market Data returns a fraction (0.0328); the app stores percent (3.28).
             ChangePercent = First(root, "changepct").GetDecimal() * 100m,
-            Volume = First(root, "volume").GetInt64(),
             LatestTradingDay = ToTradingDate(First(root, "updated").GetInt64())
         };
     }

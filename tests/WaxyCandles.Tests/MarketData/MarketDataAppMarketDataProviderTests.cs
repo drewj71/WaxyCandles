@@ -18,18 +18,14 @@ public class MarketDataAppMarketDataProviderTests
     private static long Unix(string utc) =>
         DateTimeOffset.Parse(utc).ToUnixTimeSeconds();
 
-    // 16:00 EDT on 2026-09-01.
+    // A stocks/prices response, 16:00 EDT on 2026-09-01.
     private static readonly string QuoteJson = $$"""
         {
           "s": "ok",
           "symbol": ["AAPL"],
-          "ask": [150.30], "askSize": [200],
-          "bid": [150.20], "bidSize": [400],
           "mid": [150.25],
-          "last": [150.25],
           "change": [1.21],
           "changepct": [0.008119],
-          "volume": [51234567],
           "updated": [{{Unix("2026-09-01T20:00:00Z")}}]
         }
         """;
@@ -50,7 +46,7 @@ public class MarketDataAppMarketDataProviderTests
     private readonly FakeHandler _handler = new();
 
     [Fact]
-    public async Task Quote_is_parsed()
+    public async Task Quote_is_parsed_with_the_smartmid_as_the_price()
     {
         _handler.RespondWith(QuoteJson);
 
@@ -61,7 +57,6 @@ public class MarketDataAppMarketDataProviderTests
         Assert.Equal(150.25m, quote.Price);
         Assert.Equal(1.21m, quote.Change);
         Assert.Equal(149.04m, quote.PreviousClose);
-        Assert.Equal(51_234_567, quote.Volume);
     }
 
     [Fact]
@@ -75,14 +70,15 @@ public class MarketDataAppMarketDataProviderTests
     }
 
     [Fact]
-    public async Task Quote_request_uses_normalized_symbol_and_bearer_token()
+    public async Task Quote_request_uses_the_real_time_prices_endpoint_and_bearer_token()
     {
         _handler.RespondWith(QuoteJson);
 
         await Provider().GetCurrentQuoteAsync(" brk.b ");
 
         var request = _handler.Requests.Single();
-        Assert.Equal("/v1/stocks/quotes/BRK.B/", request.Uri.AbsolutePath);
+        // stocks/prices is real-time on every plan; stocks/quotes is not.
+        Assert.Equal("/v1/stocks/prices/BRK.B/", request.Uri.AbsolutePath);
         Assert.Equal($"Bearer {TestApiToken}", request.Authorization);
         // The token goes in the header only, never the URL.
         Assert.DoesNotContain(TestApiToken, request.Uri.ToString());
