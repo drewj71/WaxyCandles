@@ -15,4 +15,10 @@ public class MarketQuote
     public long Volume { get; set; }
 
     public DateTimeOffset? LatestTradingDay { get; set; }
+
+    /// <summary>
+    /// When the provider observed this price. Null when the provider doesn't
+    /// report it (Alpha Vantage), in which case the poll time stands in.
+    /// </summary>
+    public DateTimeOffset? QuotedAt { get; set; }
 }

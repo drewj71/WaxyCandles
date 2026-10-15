@@ -39,17 +39,52 @@ public class MarketDataService : IMarketDataService
             .Union(watchlistSymbols)
             .ToList();
 
+        if (symbols.Count == 0)
+            return;
+
+        var quotes =
+            await _marketDataProvider.GetCurrentQuotesAsync(
+                symbols,
+                cancellationToken);
+
+        var quotesBySymbol = quotes
+            .ToDictionary(
+                x => x.Symbol,
+                StringComparer.OrdinalIgnoreCase);
+
+        var latestStored = await _dbContext.StockPrices
+            .Where(x => symbols.Contains(x.Symbol))
+            .GroupBy(x => x.Symbol)
+            .Select(g => new
+            {
+                Symbol = g.Key,
+                Timestamp = g.Max(x => x.Timestamp)
+            })
+            .ToDictionaryAsync(
+                x => x.Symbol,
+                x => x.Timestamp,
+                StringComparer.OrdinalIgnoreCase,
+                cancellationToken);
+
+        var polledAt = DateTimeOffset.UtcNow;
+
         foreach (var symbol in symbols)
         {
-            var quote =
-                await _marketDataProvider.GetCurrentQuoteAsync(
-                    symbol,
-                    cancellationToken);
-
-            if (quote is null)
+            if (!quotesBySymbol.TryGetValue(symbol, out var quote))
                 continue;
 
-            var timestamp = DateTimeOffset.UtcNow;
+            // When the price was observed, not when we asked for it. Alert
+            // evaluation orders prices against alert edits by this time, so a
+            // quote that is minutes old must not pass for a fresh one. Providers
+            // that don't report it fall back to the poll time.
+            var timestamp = quote.QuotedAt ?? polledAt;
+
+            // The same quote as last time (no trade or quote change since, or the
+            // market is closed): storing and publishing it again would only
+            // re-evaluate alerts against a price they have already seen.
+            if (latestStored.TryGetValue(symbol, out var latest) &&
+                timestamp <= latest)
+                continue;
 
             var stockPrice = new StockPrice
             {
@@ -74,7 +109,7 @@ public class MarketDataService : IMarketDataService
                 Id = message.MessageId,
                 Type = nameof(StockPriceUpdatedMessage),
                 Payload = JsonSerializer.Serialize(message),
-                CreatedAt = timestamp
+                CreatedAt = polledAt
             };
 
             _dbContext.StockPrices.Add(stockPrice);

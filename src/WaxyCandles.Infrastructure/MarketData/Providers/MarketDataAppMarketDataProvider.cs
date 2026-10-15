@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using WaxyCandles.Application.MarketData.Interfaces;
@@ -15,12 +13,14 @@ namespace WaxyCandles.Infrastructure.MarketData.Providers;
 /// </summary>
 public class MarketDataAppMarketDataProvider : IMarketDataProvider
 {
-    private const string BaseUrl = "https://api.marketdata.app/v1";
+    private const string BaseUrl = MarketDataAppApi.BaseUrl;
 
     // How far back an import reaches. Intraday is capped at 1 year per request
     // by the API; candles cost 1 credit per 1,000, so these are cheap.
     private static readonly TimeSpan IntradayLookback = TimeSpan.FromDays(30);
     private static readonly TimeSpan DailyLookback = TimeSpan.FromDays(365);
+
+    private const int QuoteBatchSize = 100;
 
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
@@ -37,38 +37,90 @@ public class MarketDataAppMarketDataProvider : IMarketDataProvider
         string symbol,
         CancellationToken cancellationToken = default)
     {
-        var normalizedSymbol =
-            symbol.Trim().ToUpperInvariant();
+        var quotes = await GetCurrentQuotesAsync(
+            [symbol],
+            cancellationToken);
 
+        return quotes.SingleOrDefault();
+    }
+
+    public async Task<IReadOnlyList<MarketQuote>> GetCurrentQuotesAsync(
+        IReadOnlyCollection<string> symbols,
+        CancellationToken cancellationToken = default)
+    {
+        var quotes = new List<MarketQuote>();
+
+        var normalizedSymbols = symbols
+            .Select(x => x.Trim().ToUpperInvariant())
+            .Distinct();
+
+        // One request per batch costs the same credits (1 per symbol) as one per
+        // symbol. Batches keep the URL well under the API's 4,094-byte limit.
+        foreach (var batch in normalizedSymbols.Chunk(QuoteBatchSize))
+        {
+            quotes.AddRange(await GetQuoteBatchAsync(
+                batch,
+                cancellationToken));
+        }
+
+        return quotes;
+    }
+
+    private async Task<IReadOnlyList<MarketQuote>> GetQuoteBatchAsync(
+        string[] symbols,
+        CancellationToken cancellationToken)
+    {
         // stocks/prices, not stocks/quotes: quotes are delayed or a day old unless
         // the account has the exchange agreements, while prices are real-time on
         // every plan. The price is a SmartMid (bid/ask midpoint), not the last
         // trade, and the response has no volume.
         using var document = await GetAsync(
-            $"{BaseUrl}/stocks/prices/{Uri.EscapeDataString(normalizedSymbol)}/",
+            $"{BaseUrl}/stocks/prices/" +
+            $"?symbols={string.Join(',', symbols.Select(Uri.EscapeDataString))}",
             cancellationToken);
 
-        // Unknown symbol: HTTP 404 or s = "no_data".
+        // No data for any symbol: HTTP 404 or s = "no_data".
         if (document is null)
         {
-            return null;
+            return [];
         }
 
         var root = document.RootElement;
 
-        var price = First(root, "mid").GetDecimal();
-        var change = First(root, "change").GetDecimal();
+        var returnedSymbols = root.GetProperty("symbol");
+        var mids = root.GetProperty("mid");
+        var changes = root.GetProperty("change");
+        var changePercents = root.GetProperty("changepct");
+        var updated = root.GetProperty("updated");
 
-        return new MarketQuote
+        var quotes = new List<MarketQuote>();
+
+        for (var i = 0; i < returnedSymbols.GetArrayLength(); i++)
         {
-            Symbol = normalizedSymbol,
-            Price = price,
-            PreviousClose = price - change,
-            Change = change,
-            // Market Data returns a fraction (0.0328); the app stores percent (3.28).
-            ChangePercent = First(root, "changepct").GetDecimal() * 100m,
-            LatestTradingDay = ToTradingDate(First(root, "updated").GetInt64())
-        };
+            // A symbol without data in an otherwise successful batch.
+            if (mids[i].ValueKind != JsonValueKind.Number)
+            {
+                continue;
+            }
+
+            var price = mids[i].GetDecimal();
+            var change = changes[i].GetDecimal();
+            var quotedAt = DateTimeOffset.FromUnixTimeSeconds(updated[i].GetInt64());
+
+            quotes.Add(new MarketQuote
+            {
+                Symbol = returnedSymbols[i].GetString()!.ToUpperInvariant(),
+                Price = price,
+                PreviousClose = price - change,
+                Change = change,
+                // Market Data returns a fraction (0.0328); the app stores percent (3.28).
+                ChangePercent = changePercents[i].GetDecimal() * 100m,
+                LatestTradingDay = ToTradingDate(updated[i].GetInt64()),
+                QuotedAt = quotedAt
+            });
+        }
+
+        return quotes;
     }
 
     public async Task<IReadOnlyList<StockCandle>> GetHistoricalCandlesAsync(
@@ -146,89 +198,14 @@ public class MarketDataAppMarketDataProvider : IMarketDataProvider
             .ToList();
     }
 
-    /// <summary>
-    /// Sends an authenticated GET. Returns null when Market Data has no data for
-    /// the request (HTTP 404 or s = "no_data"); throws on any other failure.
-    /// </summary>
-    private async Task<JsonDocument?> GetAsync(
+    private Task<JsonDocument?> GetAsync(
         string url,
-        CancellationToken cancellationToken)
-    {
-        var token = _configuration["MarketDataApp:ApiToken"];
-
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            throw new InvalidOperationException(
-                "Market Data API token is not configured (MarketDataApp:ApiToken).");
-        }
-
-        // Header rather than ?token=, so the token never ends up in logged URLs.
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization =
-            new AuthenticationHeaderValue("Bearer", token);
-
-        using var response = await _httpClient.SendAsync(
-            request,
+        CancellationToken cancellationToken) =>
+        MarketDataAppApi.GetAsync(
+            _httpClient,
+            _configuration,
+            url,
             cancellationToken);
-
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
-        var json = await response.Content.ReadAsStringAsync(
-            cancellationToken);
-
-        // 2xx includes 203, which Market Data uses for answers from its cache.
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException(
-                $"Market Data error ({(int)response.StatusCode}): {ErrorMessage(json)}");
-        }
-
-        var document = JsonDocument.Parse(json);
-
-        var status = document.RootElement.TryGetProperty("s", out var s)
-            ? s.GetString()
-            : null;
-
-        if (status == "ok")
-        {
-            return document;
-        }
-
-        document.Dispose();
-
-        if (status == "no_data")
-        {
-            return null;
-        }
-
-        throw new InvalidOperationException(
-            $"Market Data error: {ErrorMessage(json)}");
-    }
-
-    private static JsonElement First(JsonElement root, string property) =>
-        root.GetProperty(property)[0];
-
-    private static string ErrorMessage(string json)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-
-            if (document.RootElement.TryGetProperty("errmsg", out var errmsg))
-            {
-                return errmsg.GetString() ?? "unknown error";
-            }
-        }
-        catch (JsonException)
-        {
-            // Gateway errors (5xx) can come back as HTML.
-        }
-
-        return "unknown error";
-    }
 
     private static readonly TimeZoneInfo MarketTimeZone =
         TimeZoneInfo.FindSystemTimeZoneById("America/New_York");

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using WaxyCandles.Application.MarketData.Interfaces;
 using WaxyCandles.Infrastructure;
+using WaxyCandles.Infrastructure.MarketData.Calendars;
 using WaxyCandles.Infrastructure.MarketData.Providers;
 
 namespace WaxyCandles.Tests.MarketData;
@@ -10,14 +11,22 @@ namespace WaxyCandles.Tests.MarketData;
 public class MarketDataProviderSelectionTests
 {
     [Theory]
-    [InlineData(null, typeof(AlphaVantageMarketDataProvider))]
-    [InlineData("AlphaVantage", typeof(AlphaVantageMarketDataProvider))]
-    [InlineData("MarketDataApp", typeof(MarketDataAppMarketDataProvider))]
-    public void Configured_provider_is_registered(string? provider, Type expected)
+    [InlineData(null, typeof(AlphaVantageMarketDataProvider), typeof(WeekdayMarketCalendar))]
+    [InlineData("AlphaVantage", typeof(AlphaVantageMarketDataProvider), typeof(WeekdayMarketCalendar))]
+    [InlineData("MarketDataApp", typeof(MarketDataAppMarketDataProvider), typeof(MarketDataAppMarketCalendar))]
+    public void Configured_provider_and_its_calendar_are_registered(
+        string? provider,
+        Type expectedProvider,
+        Type expectedCalendar)
     {
         using var services = BuildServices(provider);
 
-        Assert.IsType(expected, services.GetRequiredService<IMarketDataProvider>());
+        Assert.IsType(expectedProvider, services.GetRequiredService<IMarketDataProvider>());
+        Assert.IsType(expectedCalendar, services.GetRequiredService<IMarketCalendar>());
+        // One instance, so its cache survives between polls.
+        Assert.Same(
+            services.GetRequiredService<IMarketCalendar>(),
+            services.GetRequiredService<IMarketCalendar>());
     }
 
     [Fact]
@@ -39,6 +48,7 @@ public class MarketDataProviderSelectionTests
 
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(configuration);
+        services.AddLogging();
         services.AddInfrastructure(configuration);
 
         return services.BuildServiceProvider();

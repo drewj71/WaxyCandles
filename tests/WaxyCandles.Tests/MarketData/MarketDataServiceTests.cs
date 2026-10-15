@@ -55,6 +55,76 @@ public class MarketDataServiceTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Price_is_stamped_with_when_the_provider_quoted_it_not_the_poll_time()
+    {
+        // Alert evaluation orders prices against alert edits by this timestamp.
+        var quotedAt = DateTimeOffset.UtcNow.AddMinutes(-3);
+        await SeedAlertAsync("AAPL");
+        _provider.SetQuote("AAPL", 150m, quotedAt);
+
+        await UpdatePricesAsync();
+
+        await using var db = NewDbContext();
+        var price = await db.StockPrices.SingleAsync();
+        var entry = await db.OutboxMessages.SingleAsync();
+
+        Assert.Equal(quotedAt, price.Timestamp);
+        Assert.Equal(quotedAt, Deserialize(entry).Timestamp);
+        // The outbox row records when it was written; that's its publish order.
+        Assert.True(entry.CreatedAt > quotedAt);
+    }
+
+    [Fact]
+    public async Task Quote_no_newer_than_the_stored_price_is_not_written_again()
+    {
+        var quotedAt = DateTimeOffset.UtcNow.AddMinutes(-3);
+        await SeedAlertAsync("AAPL");
+        _provider.SetQuote("AAPL", 150m, quotedAt);
+
+        await UpdatePricesAsync();
+        await UpdatePricesAsync();
+
+        await using var db = NewDbContext();
+        Assert.Equal(1, await db.StockPrices.CountAsync());
+        Assert.Equal(1, await db.OutboxMessages.CountAsync());
+    }
+
+    [Fact]
+    public async Task Newer_quote_is_written()
+    {
+        var first = DateTimeOffset.UtcNow.AddMinutes(-3);
+        await SeedAlertAsync("AAPL");
+        _provider.SetQuote("AAPL", 150m, first);
+        await UpdatePricesAsync();
+
+        _provider.SetQuote("AAPL", 151m, first.AddMinutes(1));
+        await UpdatePricesAsync();
+
+        await using var db = NewDbContext();
+        Assert.Equal(
+            [150m, 151m],
+            await db.StockPrices.OrderBy(p => p.Timestamp).Select(p => p.Price).ToListAsync());
+        Assert.Equal(2, await db.OutboxMessages.CountAsync());
+    }
+
+    [Fact]
+    public async Task Quote_without_a_provider_time_is_stamped_with_the_poll_time_every_poll()
+    {
+        // Alpha Vantage doesn't report a quote time, so each poll is a new price.
+        await SeedAlertAsync("AAPL");
+        _provider.SetQuote("AAPL", 150m);
+
+        var before = DateTimeOffset.UtcNow;
+        await UpdatePricesAsync();
+        await UpdatePricesAsync();
+
+        await using var db = NewDbContext();
+        var prices = await db.StockPrices.ToListAsync();
+        Assert.Equal(2, prices.Count);
+        Assert.All(prices, p => Assert.True(p.Timestamp >= before));
+    }
+
+    [Fact]
     public async Task Polls_untriggered_alert_and_watchlist_symbols_once_each()
     {
         await SeedAlertAsync("AAPL");

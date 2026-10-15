@@ -6,8 +6,12 @@ namespace WaxyCandles.Application.MarketData.Interfaces;
 
 public interface IMarketDataProvider
 {
-    Task<MarketQuote?> GetCurrentQuoteAsync(
-        string symbol,
+    /// <summary>
+    /// Current quotes for the given symbols. Symbols the provider has no data
+    /// for are left out of the result.
+    /// </summary>
+    Task<IReadOnlyList<MarketQuote>> GetCurrentQuotesAsync(
+        IReadOnlyCollection<string> symbols,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<StockCandle>> GetHistoricalCandlesAsync(

@@ -6,14 +6,10 @@ Update this at the end of each working session.
 ## Next up
 
 - [ ] **Push `feat/marketdata-app-provider` and open a PR** (tested end to end 2026-10-15).
-- [ ] **Stamp prices with the quote's own time, not poll time.** `MarketDataService` sets
-  `StockPrice.Timestamp` / `StockPriceUpdatedMessage.Timestamp` to `UtcNow`, but MarketData.app
-  timestamps should come from the quote's `updated` field. Alert ordering (`StateChangedAt` vs. observation time) relies on this
-  being when the price was observed. Needs a quote timestamp on `MarketQuote`.
+- [ ] **Push `feat/realtime-polling`** (branched from the above; PR after it merges).
+  Not yet tried live; run the polling worker during market hours to confirm.
 - [ ] **Options data** via MarketData.app: separate `IOptionsDataProvider` (not a bigger
   `IMarketDataProvider`). Filter chains by strike/expiration, as each contract returned costs a credit.
-- [ ] Batch quote requests in `MarketDataService` (MarketData.app takes many symbols per call
-  at the same credit cost) if the watched symbol count grows.
 - [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
   Lower priority now that MarketData.app `stocks/prices` is real-time.
   Open questions:
@@ -30,6 +26,15 @@ Update this at the end of each working session.
   plans 15-min delayed without exchange agreements), so that alert likely fired on the previous
   close. Switched quotes to `stocks/prices`, real-time SmartMid (bid/ask midpoint) on every
   plan, same 1 credit per symbol, no volume.
+- Confirmed Market Data has no WebSocket/streaming API (REST only).
+- `feat/realtime-polling`: price polling every 1 min (configurable) during market hours only,
+  all symbols in one batched `stocks/prices` call, prices stamped with the provider's quote time
+  instead of poll time (fixes stale quotes passing as fresh in alert ordering), and unchanged
+  quotes no longer re-stored/re-published.
+- Holidays: `IMarketCalendar` backed by Market Data's `markets/status` (one request per 30 days,
+  cached a day). The worker skips closed days and sleeps to the next trading day's open. Falls
+  back to "weekdays trade" on any failure (retry after 15 min). Half days count as open.
+  Full suite: 286 tests pass.
 
 ### 2026-10-14
 - Started this progress log. Context from earlier sessions wasn't saved, so the history

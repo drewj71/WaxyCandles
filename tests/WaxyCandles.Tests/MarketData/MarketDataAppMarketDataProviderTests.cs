@@ -57,6 +57,7 @@ public class MarketDataAppMarketDataProviderTests
         Assert.Equal(150.25m, quote.Price);
         Assert.Equal(1.21m, quote.Change);
         Assert.Equal(149.04m, quote.PreviousClose);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-01T20:00:00Z"), quote.QuotedAt);
     }
 
     [Fact]
@@ -78,10 +79,68 @@ public class MarketDataAppMarketDataProviderTests
 
         var request = _handler.Requests.Single();
         // stocks/prices is real-time on every plan; stocks/quotes is not.
-        Assert.Equal("/v1/stocks/prices/BRK.B/", request.Uri.AbsolutePath);
+        Assert.Equal("/v1/stocks/prices/", request.Uri.AbsolutePath);
+        Assert.Equal("BRK.B", HttpUtility.ParseQueryString(request.Uri.Query)["symbols"]);
         Assert.Equal($"Bearer {TestApiToken}", request.Authorization);
         // The token goes in the header only, never the URL.
         Assert.DoesNotContain(TestApiToken, request.Uri.ToString());
+    }
+
+    [Fact]
+    public async Task Quotes_for_several_symbols_come_from_one_request()
+    {
+        _handler.RespondWith($$"""
+            {
+              "s": "ok",
+              "symbol": ["AAPL", "MSFT"],
+              "mid": [150.25, 300.5],
+              "change": [1.21, -2.0],
+              "changepct": [0.008119, -0.0066],
+              "updated": [{{Unix("2026-09-01T20:00:00Z")}}, {{Unix("2026-09-01T19:59:00Z")}}]
+            }
+            """);
+
+        var quotes = await Provider().GetCurrentQuotesAsync(["aapl", "MSFT", "AAPL"]);
+
+        Assert.Equal(["AAPL", "MSFT"], quotes.Select(q => q.Symbol));
+        Assert.Equal(300.5m, quotes[1].Price);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-01T19:59:00Z"), quotes[1].QuotedAt);
+
+        var request = _handler.Requests.Single();
+        Assert.Equal("AAPL,MSFT", HttpUtility.ParseQueryString(request.Uri.Query)["symbols"]);
+    }
+
+    [Fact]
+    public async Task Symbol_without_data_in_a_batch_is_left_out()
+    {
+        _handler.RespondWith($$"""
+            {
+              "s": "ok",
+              "symbol": ["AAPL", "NOTASYMBOL"],
+              "mid": [150.25, null],
+              "change": [1.21, null],
+              "changepct": [0.008119, null],
+              "updated": [{{Unix("2026-09-01T20:00:00Z")}}, null]
+            }
+            """);
+
+        var quote = Assert.Single(await Provider().GetCurrentQuotesAsync(["AAPL", "NOTASYMBOL"]));
+
+        Assert.Equal("AAPL", quote.Symbol);
+    }
+
+    [Fact]
+    public async Task Large_symbol_lists_are_split_into_batches_of_100()
+    {
+        _handler.RespondWith("""{ "s": "no_data" }""");
+        var symbols = Enumerable.Range(0, 150).Select(i => $"S{i}").ToList();
+
+        Assert.Empty(await Provider().GetCurrentQuotesAsync(symbols));
+
+        Assert.Equal(
+            [100, 50],
+            _handler.Requests.Select(r =>
+                HttpUtility.ParseQueryString(r.Uri.Query)["symbols"]!.Split(',').Length));
     }
 
     [Theory]

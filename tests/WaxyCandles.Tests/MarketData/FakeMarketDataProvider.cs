@@ -22,27 +22,38 @@ public sealed class FakeMarketDataProvider : IMarketDataProvider
 
     public IReadOnlyCollection<string> QuoteRequests => _quoteRequests.ToArray();
 
-    public void SetQuote(string symbol, decimal price) =>
+    public void SetQuote(string symbol, decimal price, DateTimeOffset? quotedAt = null) =>
         Quotes[symbol] = new MarketQuote
         {
             Symbol = symbol,
             Price = price,
             Change = 1.5m,
-            ChangePercent = 0.75m
+            ChangePercent = 0.75m,
+            QuotedAt = quotedAt
         };
 
-    public Task<MarketQuote?> GetCurrentQuoteAsync(
-        string symbol,
+    public Task<IReadOnlyList<MarketQuote>> GetCurrentQuotesAsync(
+        IReadOnlyCollection<string> symbols,
         CancellationToken cancellationToken = default)
     {
-        _quoteRequests.Enqueue(symbol);
+        var quotes = new List<MarketQuote>();
 
-        if (FailingSymbols.Contains(symbol))
+        foreach (var symbol in symbols)
         {
-            throw new HttpRequestException($"Simulated provider failure for {symbol}");
+            _quoteRequests.Enqueue(symbol);
+
+            if (FailingSymbols.Contains(symbol))
+            {
+                throw new HttpRequestException($"Simulated provider failure for {symbol}");
+            }
+
+            if (Quotes.GetValueOrDefault(symbol) is { } quote)
+            {
+                quotes.Add(quote);
+            }
         }
 
-        return Task.FromResult(Quotes.GetValueOrDefault(symbol));
+        return Task.FromResult<IReadOnlyList<MarketQuote>>(quotes);
     }
 
     public Task<IReadOnlyList<StockCandle>> GetHistoricalCandlesAsync(

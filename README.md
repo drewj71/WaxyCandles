@@ -92,7 +92,7 @@ EF Core persistence, market-data integrations, RabbitMQ messaging, and other inf
 
 **WaxyCandles.PricePollingWorker**
 
-Background service responsible for periodically retrieving market prices.
+Background service that polls current prices for every watched symbol, every minute by default (`PricePolling:Interval`), during US regular trading hours only (`PricePolling:MarketHoursOnly`), skipping market holidays using Market Data's market status calendar. Prices are stamped with the provider's quote time, and a quote that hasn't changed since the last poll isn't stored or published again.
 
 **WaxyCandles.OutboxWorker**
 

@@ -22,6 +22,28 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
         _configuration = configuration;
     }
 
+    // Alpha Vantage has no batch quote endpoint: one request per symbol.
+    public async Task<IReadOnlyList<MarketQuote>> GetCurrentQuotesAsync(
+        IReadOnlyCollection<string> symbols,
+        CancellationToken cancellationToken = default)
+    {
+        var quotes = new List<MarketQuote>();
+
+        foreach (var symbol in symbols)
+        {
+            var quote = await GetCurrentQuoteAsync(
+                symbol,
+                cancellationToken);
+
+            if (quote is not null)
+            {
+                quotes.Add(quote);
+            }
+        }
+
+        return quotes;
+    }
+
     public async Task<MarketQuote?> GetCurrentQuoteAsync(
         string symbol,
         CancellationToken cancellationToken = default)

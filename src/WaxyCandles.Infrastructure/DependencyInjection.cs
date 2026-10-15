@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using WaxyCandles.Infrastructure.Identity;
 using WaxyCandles.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -13,6 +14,7 @@ using WaxyCandles.Infrastructure.Alerts;
 using WaxyCandles.Application.MarketData.Interfaces;
 using WaxyCandles.Infrastructure.MarketData.Providers;
 using WaxyCandles.Infrastructure.MarketData;
+using WaxyCandles.Infrastructure.MarketData.Calendars;
 using WaxyCandles.Infrastructure.Messaging;
 using WaxyCandles.Infrastructure.Watchlists;
 using WaxyCandles.Application.Watchlists.Interfaces;
@@ -53,18 +55,28 @@ public static class DependencyInjection
     {
         var provider = configuration["MarketData:Provider"];
 
+        services.TryAddSingleton(TimeProvider.System);
+
         switch (provider)
         {
             case null or "" or "AlphaVantage":
                 services.AddHttpClient<
                     IMarketDataProvider,
                     AlphaVantageMarketDataProvider>();
+                services.AddSingleton<
+                    IMarketCalendar,
+                    WeekdayMarketCalendar>();
                 break;
 
             case "MarketDataApp":
                 services.AddHttpClient<
                     IMarketDataProvider,
                     MarketDataAppMarketDataProvider>();
+                // Singleton: its cache must outlive each poll. It takes
+                // IHttpClientFactory rather than a long-lived HttpClient.
+                services.AddSingleton<
+                    IMarketCalendar,
+                    MarketDataAppMarketCalendar>();
                 break;
 
             default:
