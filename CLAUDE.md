@@ -102,6 +102,8 @@ The app is mid-refactor from plain React Router to TanStack Router + TanStack Qu
 
 ## Working rules
 
+- `docs/PROGRESS.md` is the running log of what's changed and what's planned next. Read it at the start of a session for context; at the end of a session (or after finishing a meaningful chunk of work) add a dated log entry and update the "Next up" list.
+
 - After backend changes run `dotnet build`; after frontend changes run `npm run build` (it type-checks) and `npm run lint`.
 - Changes to consumers, the outbox, or queue topology: explain the plan first and call out the effect on retry/dead-letter behavior and idempotency before editing.
 - Never edit or delete applied EF migrations; add a new one.
