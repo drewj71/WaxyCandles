@@ -32,6 +32,20 @@ public sealed class AlertResponse
 
     public int TriggerCount { get; init; }
 
+    public GexLevelKind? Level { get; init; }
+
+    public decimal? LevelProximityPercent { get; init; }
+
+    public int? LevelDays { get; init; }
+
+    public decimal? LevelStrikeRange { get; init; }
+
+    /// <summary>The level's strike when the target was last resolved.</summary>
+    public decimal? LevelPrice { get; init; }
+
+    /// <summary>The option chain snapshot the level came from.</summary>
+    public DateTimeOffset? LevelAsOf { get; init; }
+
     public static AlertResponse From(Alert alert, DateTimeOffset now) => new()
     {
         Id = alert.Id,
@@ -46,6 +60,12 @@ public sealed class AlertResponse
         CreatedAt = alert.CreatedAt,
         ExpiresAt = alert.ExpiresAt,
         TriggeredAt = alert.TriggeredAt,
-        TriggerCount = alert.TriggerCount
+        TriggerCount = alert.TriggerCount,
+        Level = alert.Level,
+        LevelProximityPercent = alert.LevelProximityPercent,
+        LevelDays = alert.LevelDays,
+        LevelStrikeRange = alert.LevelStrikeRange,
+        LevelPrice = alert.LevelPrice,
+        LevelAsOf = alert.LevelAsOf
     };
 }

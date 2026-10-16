@@ -41,14 +41,25 @@ public class NotificationService : INotificationService
             ? "rose above"
             : "fell below";
 
+        // Level is null for price alerts, including messages written before
+        // level alerts existed.
+        var (title, body) = message.Level is { } level
+            ? ($"{message.Symbol} GEX level alert triggered",
+               $"{message.Symbol} {verb} {FormatPrice(message.TargetPrice)}, approaching its " +
+               LevelName(level) +
+               (message.LevelPrice is { } levelPrice ? $" at {FormatPrice(levelPrice)}" : "") +
+               $" (now {FormatPrice(message.TriggerPrice)}).")
+            : ($"{message.Symbol} alert triggered",
+               $"{message.Symbol} {verb} {FormatPrice(message.TargetPrice)} " +
+               $"(now {FormatPrice(message.TriggerPrice)}).");
+
         var notification = new Notification
         {
             Id = Guid.NewGuid(),
             UserId = message.UserId,
             Type = NotificationType.AlertTriggered,
-            Title = $"{message.Symbol} alert triggered",
-            Body = $"{message.Symbol} {verb} {FormatPrice(message.TargetPrice)} " +
-                   $"(now {FormatPrice(message.TriggerPrice)}).",
+            Title = title,
+            Body = body,
             AlertId = message.AlertId,
             SourceMessageId = message.MessageId,
             CreatedAt = message.TriggeredAt
@@ -149,6 +160,15 @@ public class NotificationService : INotificationService
     // "$150.25", "$0.0525": at least 2 decimals, up to the 6 stored.
     private static string FormatPrice(decimal price) =>
         "$" + price.ToString("0.00####", CultureInfo.InvariantCulture);
+
+    private static string LevelName(GexLevelKind level) => level switch
+    {
+        GexLevelKind.King => "King node",
+        GexLevelKind.Gatekeeper => "gatekeeper",
+        GexLevelKind.Floor => "floor",
+        GexLevelKind.Ceiling => "ceiling",
+        _ => "GEX level"
+    };
 
     private static NotificationResponse ToResponse(Notification notification) => new()
     {

@@ -11,6 +11,7 @@ import {
     type UpdateAlertRequest,
 } from "@/api/alerts";
 import { apiErrorMessages } from "@/api/errors";
+import { Route } from "@/routes/_dashboard/alerts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -38,12 +39,35 @@ const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
     timeStyle: "short",
 });
 
+const dateFormat = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+});
+
+/** "Above $597.00", or for a level alert "Approaching King $600.00 (above $597.00)". */
+function describeTarget(alert: Alert): string {
+    const target = `$${priceFormat.format(alert.targetPrice)}`;
+
+    if (!alert.level) {
+        return `${alert.direction} ${target}`;
+    }
+
+    const level = alert.levelPrice !== null
+        ? ` $${priceFormat.format(alert.levelPrice)}`
+        : "";
+
+    return `Approaching ${alert.level}${level} (${alert.direction.toLowerCase()} ${target}, within ${alert.levelProximityPercent}%)`;
+}
+
 function describe(alert: Alert): string[] {
     const parts = [
         alert.frequency === "EveryCross"
             ? `Every cross, ${alert.cooldownMinutes} min cooldown`
             : "Once",
     ];
+
+    if (alert.level && alert.levelAsOf) {
+        parts.push(`Level as of ${dateFormat.format(new Date(alert.levelAsOf))}`);
+    }
 
     if (alert.expiresAt) {
         parts.push(
@@ -71,8 +95,12 @@ function ErrorList({ messages }: { messages: string[] }) {
 }
 
 function Alerts() {
+    const search = Route.useSearch();
+    const navigate = Route.useNavigate();
+
+    // Opened from a GEX page level card: start with that level and board.
     const [showCreateForm, setShowCreateForm] =
-        useState(false);
+        useState(!!search.level);
 
     const [editingAlert, setEditingAlert] =
         useState<Alert | null>(null);
@@ -87,7 +115,16 @@ function Alerts() {
     const alerts = alertsQuery.data ?? [];
 
     const createForm = useForm<AlertFormValues>({
-        defaultValues: emptyAlertForm,
+        defaultValues: search.level
+            ? {
+                ...emptyAlertForm,
+                symbol: search.symbol ?? "",
+                targetType: "Level",
+                level: search.level,
+                levelDays: String(search.days ?? emptyAlertForm.levelDays),
+                levelStrikeRange: String(search.range ?? emptyAlertForm.levelStrikeRange),
+            }
+            : emptyAlertForm,
     });
 
     const editForm = useForm<AlertFormValues>({
@@ -105,6 +142,17 @@ function Alerts() {
         name: "frequency",
     });
 
+    // Price alerts show target and direction; level alerts the level fields.
+    const createTargetType = useWatch({
+        control: createForm.control,
+        name: "targetType",
+    });
+
+    const editTargetType = useWatch({
+        control: editForm.control,
+        name: "targetType",
+    });
+
     function refresh() {
         return queryClient.invalidateQueries({
             queryKey: ["alerts"],
@@ -120,6 +168,8 @@ function Alerts() {
         onSuccess: async () => {
             createForm.reset(emptyAlertForm);
             setShowCreateForm(false);
+            // Drop any GEX pre-fill, so a reload doesn't reopen the form.
+            await navigate({ search: {} });
             await refresh();
         },
     });
@@ -186,7 +236,7 @@ function Alerts() {
                     </h1>
 
                     <p className="text-sm text-muted-foreground">
-                        Manage your price alerts.
+                        Manage your price and GEX level alerts.
                     </p>
                 </div>
 
@@ -245,9 +295,17 @@ function Alerts() {
                                     register={createForm.register}
                                     errors={createForm.formState.errors}
                                     frequency={createFrequency}
+                                    targetType={createTargetType}
                                     disabled={createMutation.isPending}
                                 />
                             </div>
+
+                            {createTargetType === "Level" && (
+                                <p className="text-sm text-muted-foreground">
+                                    Fires when the price comes within this distance of the level, from whichever side it is on.
+                                    The level is re-read from the GEX board each trading day, which moves the target and re-arms the alert.
+                                </p>
+                            )}
 
                             <div className="flex justify-end">
                                 <Button
@@ -319,13 +377,16 @@ function Alerts() {
                                             register={editForm.register}
                                             errors={editForm.formState.errors}
                                             frequency={editFrequency}
+                                            targetType={editTargetType}
                                             disabled={updateMutation.isPending}
                                         />
                                     </div>
 
                                     {alert.isTriggered && (
                                         <p className="text-sm text-muted-foreground">
-                                            Changing the target, direction or repeat setting re-arms this alert.
+                                            {editTargetType === "Level"
+                                                ? "Changing the level, distance, board or repeat setting re-arms this alert."
+                                                : "Changing the target, direction or repeat setting re-arms this alert."}
                                         </p>
                                     )}
 
@@ -366,8 +427,7 @@ function Alerts() {
                                         </div>
 
                                         <div className="text-sm">
-                                            {alert.direction} $
-                                            {priceFormat.format(alert.targetPrice)}
+                                            {describeTarget(alert)}
                                         </div>
 
                                         <div className="text-xs text-muted-foreground">

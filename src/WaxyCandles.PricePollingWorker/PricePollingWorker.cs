@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using WaxyCandles.Application.Alerts.Interfaces;
 using WaxyCandles.Application.MarketData;
 using WaxyCandles.Application.MarketData.Interfaces;
 
@@ -6,11 +7,17 @@ namespace WaxyCandles.PricePollingWorker;
 
 public class PricePollingWorker : BackgroundService
 {
+    // After a failed GEX level refresh, wait this long before trying again,
+    // so a provider outage doesn't cost a board request on every poll.
+    private static readonly TimeSpan LevelRefreshRetryDelay = TimeSpan.FromMinutes(15);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<PricePollingWorker> _logger;
     private readonly PricePollingOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly IMarketCalendar _marketCalendar;
+
+    private readonly DailyRefreshSchedule _levelRefresh = new(LevelRefreshRetryDelay);
 
     public PricePollingWorker(
         IServiceScopeFactory scopeFactory,
@@ -55,6 +62,10 @@ public class PricePollingWorker : BackgroundService
 
             try
             {
+                // Before the day's first prices, so they're checked against
+                // today's levels.
+                await RefreshGexLevelsIfDueAsync(now, stoppingToken);
+
                 using var scope = _scopeFactory.CreateScope();
 
                 var marketDataService =
@@ -84,5 +95,42 @@ public class PricePollingWorker : BackgroundService
                 _timeProvider,
                 stoppingToken);
         }
+    }
+
+    /// <summary>
+    /// Once per trading day (on the first poll, or on start-up mid-session),
+    /// moves GEX level alerts' targets to today's levels. A failure is retried
+    /// after <see cref="LevelRefreshRetryDelay"/>, and never stops price polling.
+    /// </summary>
+    private async Task RefreshGexLevelsIfDueAsync(
+        DateTimeOffset now,
+        CancellationToken stoppingToken)
+    {
+        if (!_levelRefresh.IsDue(now))
+        {
+            return;
+        }
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+
+            var refresher = scope.ServiceProvider
+                .GetRequiredService<IGexLevelAlertRefresher>();
+
+            if (await refresher.RefreshAsync(stoppingToken))
+            {
+                _levelRefresh.Succeeded(now);
+                return;
+            }
+        }
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "Error while refreshing GEX level alerts.");
+        }
+
+        _logger.LogWarning(
+            "GEX level alerts not fully refreshed. Retrying after {RetryAt:u}.",
+            _levelRefresh.Failed(now));
     }
 }

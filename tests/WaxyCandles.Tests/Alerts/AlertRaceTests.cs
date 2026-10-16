@@ -149,7 +149,7 @@ public class AlertRaceTests(IntegrationFixture fixture) : DatabaseTestBase(fixtu
     {
         await using var db = NewContext(interceptor);
 
-        var updated = await new AlertService(db).UpdateAsync(
+        var updated = await new AlertService(db, new FakeGexLevelBoardSource()).UpdateAsync(
             id,
             "user-1",
             new UpdateAlertRequest

@@ -147,17 +147,22 @@ public class AlertEvaluationService : IAlertEvaluationService
                 cancellationToken);
 
     // What the fire/re-arm decision was based on. The event reports these
-    // values too, so they must still be the alert's.
+    // values too, so they must still be the alert's. A level alert's daily
+    // refresh changes them just as an edit does.
     private static Expression<Func<Alert, bool>> UnchangedSince(Alert snapshot)
     {
         var targetPrice = snapshot.TargetPrice;
         var direction = snapshot.Direction;
         var frequency = snapshot.Frequency;
+        var level = snapshot.Level;
+        var levelPrice = snapshot.LevelPrice;
 
         return a =>
             a.TargetPrice == targetPrice &&
             a.Direction == direction &&
-            a.Frequency == frequency;
+            a.Frequency == frequency &&
+            a.Level == level &&
+            a.LevelPrice == levelPrice;
     }
 
     private static Expression<Func<Alert, bool>> PriceIsNewerThanLastChange(
@@ -175,7 +180,9 @@ public class AlertEvaluationService : IAlertEvaluationService
             Direction = alert.Direction,
             TargetPrice = alert.TargetPrice,
             TriggerPrice = price,
-            TriggeredAt = alert.TriggeredAt!.Value
+            TriggeredAt = alert.TriggeredAt!.Value,
+            Level = alert.Level,
+            LevelPrice = alert.LevelPrice
         };
 
         _dbContext.OutboxMessages.Add(new OutboxMessage

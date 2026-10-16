@@ -16,9 +16,19 @@ export type AlertStatus =
     | "Disabled"
     | "Expired";
 
+/** A named node on a symbol's GEX board, as an alert target. */
+export type GexLevelKind =
+    | "King"
+    | "Gatekeeper"
+    | "Floor"
+    | "Ceiling";
+
+export const gexLevelKinds: GexLevelKind[] = ["King", "Gatekeeper", "Floor", "Ceiling"];
+
 export type Alert = {
     id: string;
     symbol: string;
+    /** For a level alert, derived from the level each trading day. */
     targetPrice: number;
     direction: AlertDirection;
     frequency: AlertFrequency;
@@ -31,14 +41,29 @@ export type Alert = {
     /** When it last fired. */
     triggeredAt: string | null;
     triggerCount: number;
+    /** Set for a GEX level alert; null for a price alert. */
+    level: GexLevelKind | null;
+    levelProximityPercent: number | null;
+    levelDays: number | null;
+    levelStrikeRange: number | null;
+    /** The level's strike when the target was last resolved. */
+    levelPrice: number | null;
+    /** The option chain snapshot the level came from. */
+    levelAsOf: string | null;
 };
 
 export type AlertSettings = {
+    /** Ignored for a level alert. */
     targetPrice: number;
+    /** Ignored for a level alert. */
     direction: AlertDirection;
     frequency: AlertFrequency;
     cooldownMinutes: number;
     expiresAt: string | null;
+    level: GexLevelKind | null;
+    levelProximityPercent?: number;
+    levelDays?: number;
+    levelStrikeRange?: number;
 };
 
 export type CreateAlertRequest = AlertSettings & {
@@ -52,6 +77,8 @@ export type UpdateAlertRequest = AlertSettings & {
 
 export const defaultCooldownMinutes = 15;
 
+export const defaultLevelProximityPercent = 0.5;
+
 /** The settings of an existing alert, e.g. to toggle one field and PUT it back. */
 export function toUpdateRequest(alert: Alert): UpdateAlertRequest {
     return {
@@ -61,6 +88,10 @@ export function toUpdateRequest(alert: Alert): UpdateAlertRequest {
         cooldownMinutes: alert.cooldownMinutes,
         expiresAt: alert.expiresAt,
         isEnabled: alert.isEnabled,
+        level: alert.level,
+        levelProximityPercent: alert.levelProximityPercent ?? undefined,
+        levelDays: alert.levelDays ?? undefined,
+        levelStrikeRange: alert.levelStrikeRange ?? undefined,
     };
 }
 

@@ -182,6 +182,30 @@ namespace WaxyCandles.Infrastructure.Migrations
                     b.Property<bool>("IsTriggered")
                         .HasColumnType("bit");
 
+                    b.Property<int?>("Level")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("LevelAsOf")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateOnly?>("LevelCheckedOn")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("LevelDays")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("LevelPrice")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("LevelProximityPercent")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("LevelStrikeRange")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
                     b.Property<DateTimeOffset?>("StateChangedAt")
                         .HasColumnType("datetimeoffset");
 

@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\WaxyCandles.Infrastructure\WaxyCandles.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\WaxyCandles.AlertWorker\WaxyCandles.AlertWorker.csproj" />
     <ProjectReference Include="..\..\src\WaxyCandles.OutboxWorker\WaxyCandles.OutboxWorker.csproj" />
+    <ProjectReference Include="..\..\src\WaxyCandles.PricePollingWorker\WaxyCandles.PricePollingWorker.csproj" />
     <ProjectReference Include="..\..\src\WaxyCandles.Api\WaxyCandles.Api.csproj" />
   </ItemGroup>
 

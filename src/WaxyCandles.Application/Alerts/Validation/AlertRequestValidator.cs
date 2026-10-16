@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using WaxyCandles.Application.Alerts.DTOs;
 using WaxyCandles.Application.Common.Exceptions;
+using WaxyCandles.Application.Options.Gex;
 using WaxyCandles.Domain.Enums;
 
 namespace WaxyCandles.Application.Alerts.Validation;
@@ -10,6 +11,8 @@ public static partial class AlertRequestValidator
     public const int MinCooldownMinutes = 1;
 
     public const int MaxCooldownMinutes = 24 * 60;
+
+    public const decimal MaxLevelProximityPercent = 5m;
 
     // Prices are stored as decimal(18,6): 12 digits before the point.
     private const decimal MaxTargetPrice = 999_999_999_999m;
@@ -42,7 +45,15 @@ public static partial class AlertRequestValidator
             request.CooldownMinutes,
             request.ExpiresAt,
             checkExpiry: true,
-            now);
+            now,
+            isLevelAlert: request.Level is not null);
+
+        ValidateLevel(
+            errors,
+            request.Level,
+            request.LevelProximityPercent,
+            request.LevelDays,
+            request.LevelStrikeRange);
 
         ThrowIfAny(errors);
     }
@@ -67,7 +78,15 @@ public static partial class AlertRequestValidator
             request.CooldownMinutes,
             request.ExpiresAt,
             checkExpiry: request.ExpiresAt != currentExpiresAt,
-            now);
+            now,
+            isLevelAlert: request.Level is not null);
+
+        ValidateLevel(
+            errors,
+            request.Level,
+            request.LevelProximityPercent,
+            request.LevelDays,
+            request.LevelStrikeRange);
 
         ThrowIfAny(errors);
     }
@@ -80,14 +99,16 @@ public static partial class AlertRequestValidator
         int cooldownMinutes,
         DateTimeOffset? expiresAt,
         bool checkExpiry,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool isLevelAlert)
     {
-        if (targetPrice <= 0 || targetPrice > MaxTargetPrice)
+        // A level alert's target and direction are derived, not sent.
+        if (!isLevelAlert && (targetPrice <= 0 || targetPrice > MaxTargetPrice))
         {
             errors["targetPrice"] = ["Target price must be greater than 0."];
         }
 
-        if (!Enum.IsDefined(direction))
+        if (!isLevelAlert && !Enum.IsDefined(direction))
         {
             errors["direction"] = ["Direction must be Above or Below."];
         }
@@ -108,6 +129,45 @@ public static partial class AlertRequestValidator
         if (checkExpiry && expiresAt <= now)
         {
             errors["expiresAt"] = ["Expiry must be in the future."];
+        }
+    }
+
+    private static void ValidateLevel(
+        Dictionary<string, string[]> errors,
+        GexLevelKind? level,
+        decimal proximityPercent,
+        int days,
+        decimal strikeRange)
+    {
+        if (level is null)
+        {
+            return;
+        }
+
+        if (!Enum.IsDefined(level.Value))
+        {
+            errors["level"] = ["Level must be King, Gatekeeper, Floor or Ceiling."];
+        }
+
+        if (proximityPercent is < 0 or > MaxLevelProximityPercent)
+        {
+            errors["levelProximityPercent"] =
+            [
+                $"Proximity must be between 0 and {MaxLevelProximityPercent}%."
+            ];
+        }
+
+        if (days is < 0 or > GexRequest.MaxDays)
+        {
+            errors["levelDays"] = [$"Days must be between 0 and {GexRequest.MaxDays}."];
+        }
+
+        if (strikeRange is <= 0 or > GexRequest.MaxStrikeRangePercent)
+        {
+            errors["levelStrikeRange"] =
+            [
+                $"Strike range must be more than 0 and at most {GexRequest.MaxStrikeRangePercent}%."
+            ];
         }
     }
 

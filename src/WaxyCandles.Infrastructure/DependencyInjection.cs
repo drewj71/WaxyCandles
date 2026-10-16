@@ -55,6 +55,8 @@ public static class DependencyInjection
         services.Configure<GexOptions>(
             configuration.GetSection(GexOptions.SectionName));
         services.AddScoped<IGexService, GexService>();
+        services.AddScoped<IGexLevelBoardSource, GexLevelBoardSource>();
+        services.AddScoped<IGexLevelAlertRefresher, GexLevelAlertRefresher>();
 
         return services;
     }

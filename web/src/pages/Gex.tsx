@@ -2,11 +2,13 @@ import { useEffect, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { useQuery } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
-import { RefreshCw, Search, Star } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { BellPlus, RefreshCw, Search, Star } from "lucide-react";
 
 import { Route } from "@/routes/_dashboard/gex";
 import { getGexTable, type GexNode } from "@/api/options";
 import { apiErrorMessages } from "@/api/errors";
+import type { GexLevelKind } from "@/api/alerts";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -44,14 +46,25 @@ function easternDate(date: Date) {
     });
 }
 
+/** An alert on a level follows the board it was set from, so the link carries it. */
+type LevelAlertLink = {
+    symbol: string;
+    level: GexLevelKind;
+    days: number;
+    range: number;
+};
+
 function NodeSummary({
     label,
     node,
     icon,
+    alertLink,
 }: {
     label: string;
     node: GexNode | null;
     icon?: ReactNode;
+    /** Shown in the GEX view only: level alerts follow GEX levels, not VEX. */
+    alertLink?: LevelAlertLink;
 }) {
     return (
         <Card size="sm">
@@ -59,6 +72,18 @@ function NodeSummary({
                 <CardTitle className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                     {icon}
                     {label}
+
+                    {node && alertLink && (
+                        <Link
+                            to="/alerts"
+                            search={alertLink}
+                            className="ml-auto rounded-sm p-0.5 hover:bg-muted hover:text-foreground"
+                            title={`Alert me when ${alertLink.symbol} approaches its ${label}`}
+                            aria-label={`Create an alert on the ${label}`}
+                        >
+                            <BellPlus className="size-3.5" />
+                        </Link>
+                    )}
                 </CardTitle>
             </CardHeader>
 
@@ -132,6 +157,11 @@ function Gex() {
     const table = gexQuery.data;
     const levels = table && (view === "gex" ? table.gexLevels : table.vexLevels);
     const total = table && (view === "gex" ? table.totalGex : table.totalVex);
+    const alertLink = (level: GexLevelKind): LevelAlertLink | undefined =>
+        table && view === "gex"
+            ? { symbol: table.symbol, level, days, range }
+            : undefined;
+
     const fromEarlierSession =
         table && easternDate(new Date(table.asOf)) !== easternDate(new Date());
 
@@ -286,10 +316,23 @@ function Gex() {
                             label="King"
                             node={levels.king}
                             icon={<Star className="size-3" />}
+                            alertLink={alertLink("King")}
                         />
-                        <NodeSummary label="Gatekeeper" node={levels.gatekeeper} />
-                        <NodeSummary label="Floor" node={levels.floor} />
-                        <NodeSummary label="Ceiling" node={levels.ceiling} />
+                        <NodeSummary
+                            label="Gatekeeper"
+                            node={levels.gatekeeper}
+                            alertLink={alertLink("Gatekeeper")}
+                        />
+                        <NodeSummary
+                            label="Floor"
+                            node={levels.floor}
+                            alertLink={alertLink("Floor")}
+                        />
+                        <NodeSummary
+                            label="Ceiling"
+                            node={levels.ceiling}
+                            alertLink={alertLink("Ceiling")}
+                        />
                     </div>
 
                     {fromEarlierSession && (

@@ -204,6 +204,15 @@ Direction: Above
 
 When a market-price update is received, the Alert Worker evaluates the matching alerts that are enabled, not expired, and either armed or repeating.
 
+## GEX Level Alerts
+
+An alert can follow a level on the symbol's GEX board instead of a fixed price: the **King**, **Gatekeeper**, **Floor** or **Ceiling**. For example: "alert me when SPY comes within 0.5% of its King".
+
+* The alert fires when the price comes within the chosen distance (0–5% of the level) from whichever side it's on. Below the level that's "above level − distance"; above it, "below level + distance".
+* Each alert follows the board it was set from (expiries and strike range). Create one from the Alerts page ("Alert on: A GEX level") or with the bell on a level card on the GEX page.
+* At the start of each trading day the Price Polling Worker re-reads every active level alert's board and moves its target to where the level is today, re-arming it if it moved. Each alert is refreshed at most once a day, and if a board fails to load the alert keeps yesterday's target and is retried 15 minutes later.
+* Credits: one quote and one option chain per distinct symbol and board each trading day, plus one when an alert is created or revived.
+
 ## Alert Notifications
 
 When an alert triggers, its owner is notified in the app:

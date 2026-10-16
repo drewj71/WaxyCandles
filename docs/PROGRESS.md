@@ -9,8 +9,11 @@ Update this at the end of each working session.
   during market hours (prices stored with quote time, one batched call per poll) and after the
   close (logs "Market closed. Next price poll at ...", no calendar warnings, so the trial
   allows `markets/status`). Market Data trial ends ~2026-11-13.
-- [ ] **GEX follow-ups**: % of King display, node velocity (needs stored snapshots), GEX alerts
-  (e.g. price approaching the King), a GEX panel on the stock page.
+- [ ] **Live-test GEX level alerts** (`feat/gex-level-alerts`): create one from a GEX level card,
+  check the next morning's refresh log ("Alert ...: SPY King is at ...; target now ..."), and that a
+  notification reads "SPY rose above $X, approaching its King node at $Y".
+- [ ] **GEX follow-ups**: % of King display, node velocity (needs stored snapshots), a GEX panel on
+  the stock page.
 - [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
   Lower priority now that MarketData.app `stocks/prices` is real-time.
   Open questions:
@@ -44,6 +47,18 @@ Update this at the end of each working session.
   for missing gamma/IV, `GET /api/stocks/{symbol}/gex` cached a minute. Naive dealer model
   (calls +, puts -). Trial plans get the previous session's chain; the page says so.
   Tested locally against the real API: works.
+- `feat/gex-level-alerts`: alerts on GEX levels (King/Gatekeeper/Floor/Ceiling, within 0-5%). A level
+  alert is a price alert whose target/direction are derived from the level ("approaching" from the
+  price's side) and re-resolved once per trading day by the PricePollingWorker before the first poll.
+  New `Alerts` columns (additive migration `AddGexLevelAlerts`); `AlertTriggeredMessage` gains nullable
+  `Level`/`LevelPrice`. No consumer, topology, retry or outbox changes. Alerts page form and list, and
+  a bell on each GEX level card that opens a pre-filled alert.
+- messaging-reviewer: guarantees hold (no duplicate events, compatible message change). Fixed its
+  findings: a retry/restart mid-session could re-resolve against the current price, flip direction and
+  fire one approach twice (now at most once per trading date, persisted as `LevelCheckedOn`, and
+  retries only reload failed boards); refresh stamped wall-clock time, which silenced lagging quotes
+  (now the newest stored price time, never moved back); a revived alert kept a stale target (any edit
+  to an alert not checked today re-resolves it, without blocking the edit if the level is gone).
 
 ### 2026-10-14
 - Started this progress log. Context from earlier sessions wasn't saved, so the history

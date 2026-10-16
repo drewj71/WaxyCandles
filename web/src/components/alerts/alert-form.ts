@@ -1,16 +1,27 @@
 import {
     defaultCooldownMinutes,
+    defaultLevelProximityPercent,
     type Alert,
     type AlertDirection,
     type AlertFrequency,
     type AlertSettings,
+    type GexLevelKind,
 } from "@/api/alerts";
+import { DEFAULT_DAYS, DEFAULT_RANGE } from "@/components/gex/gex-search";
+
+/** Price: a fixed target. Level: follows a node of the symbol's GEX board. */
+export type AlertTargetType = "Price" | "Level";
 
 /** Form state for creating or editing an alert (inputs hold strings). */
 export type AlertFormValues = {
     symbol: string;
+    targetType: AlertTargetType;
     targetPrice: string;
     direction: AlertDirection;
+    level: GexLevelKind;
+    levelProximityPercent: string;
+    levelDays: string;
+    levelStrikeRange: string;
     frequency: AlertFrequency;
     cooldownMinutes: string;
     /** A datetime-local value in the user's time zone, or "" for no expiry. */
@@ -19,8 +30,13 @@ export type AlertFormValues = {
 
 export const emptyAlertForm: AlertFormValues = {
     symbol: "",
+    targetType: "Price",
     targetPrice: "",
     direction: "Above",
+    level: "King",
+    levelProximityPercent: String(defaultLevelProximityPercent),
+    levelDays: String(DEFAULT_DAYS),
+    levelStrikeRange: String(DEFAULT_RANGE),
     frequency: "Once",
     cooldownMinutes: String(defaultCooldownMinutes),
     expiresAt: "",
@@ -37,8 +53,13 @@ export function toLocalDateTimeInput(iso: string): string {
 export function toAlertForm(alert: Alert): AlertFormValues {
     return {
         symbol: alert.symbol,
+        targetType: alert.level ? "Level" : "Price",
         targetPrice: String(alert.targetPrice),
         direction: alert.direction,
+        level: alert.level ?? emptyAlertForm.level,
+        levelProximityPercent: String(alert.levelProximityPercent ?? defaultLevelProximityPercent),
+        levelDays: String(alert.levelDays ?? DEFAULT_DAYS),
+        levelStrikeRange: String(alert.levelStrikeRange ?? DEFAULT_RANGE),
         frequency: alert.frequency,
         cooldownMinutes: String(alert.cooldownMinutes),
         expiresAt: alert.expiresAt
@@ -66,11 +87,20 @@ export function toAlertSettings(
                 : new Date(values.expiresAt).toISOString();
     }
 
+    const isLevel = values.targetType === "Level";
+
     return {
-        targetPrice: Number(values.targetPrice),
+        // Ignored by the API for a level alert, which derives them.
+        targetPrice: isLevel ? 0 : Number(values.targetPrice),
         direction: values.direction,
         frequency: values.frequency,
         cooldownMinutes: Number(values.cooldownMinutes),
         expiresAt,
+        level: isLevel ? values.level : null,
+        ...(isLevel && {
+            levelProximityPercent: Number(values.levelProximityPercent),
+            levelDays: Number(values.levelDays),
+            levelStrikeRange: Number(values.levelStrikeRange),
+        }),
     };
 }
