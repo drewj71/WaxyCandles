@@ -12,8 +12,13 @@ Update this at the end of each working session.
 - [ ] **Live-test GEX level alerts** (`feat/gex-level-alerts`): create one from a GEX level card,
   check the next morning's refresh log ("Alert ...: SPY King is at ...; target now ..."), and that a
   notification reads "SPY rose above $X, approaching its King node at $Y".
-- [ ] **Look at a real trace**: `docker compose up -d`, run the API and workers, open
-  http://localhost:18888 and follow a price from poll to notification (`feat/distributed-tracing`).
+- [ ] **Metrics and health checks** (next, agreed 2026-10-16): outbox backlog/age, queue depth,
+  dead-letter count, alerts fired, Market Data credits per day (for the plan decision before the
+  trial ends ~2026-11-13); `/health` for the API and workers.
+- [ ] **IV analytics on the GEX page**: ATM IV term structure and skew per expiration, from the
+  chain already fetched.
+- [ ] **Housekeeping (needs you)**: delete the 11 merged branches (my attempt was blocked by the
+  permission check), and add `MARKETDATA_API_TOKEN=` to `.env.example` (I can't edit `.env*`).
 - [ ] **GEX follow-ups**: % of King display, node velocity (needs stored snapshots), a GEX panel on
   the stock page.
 - [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
@@ -36,6 +41,10 @@ Update this at the end of each working session.
   before running the new code (EF now names the columns, so against an old schema the alert worker
   would dead-letter alert-firing prices and the poller/outbox would fail), and roll back code before
   schema. Docker's migrator enforces this; with `dotnet run`, run `dotnet ef database update` first.
+- Tracing merged and confirmed working locally (traces visible in the dashboard).
+- `chore/small-fixes`: Dashboard "Market Status" card now real (`GET /api/market/status`, same
+  calendar as the poller: open/closed and next open/close), route-level code splitting (largest
+  chunk 327 KB, was one 912 KB bundle), CLAUDE.md test-suite description updated.
 
 ### 2026-10-15
 - Tested MarketData.app end to end locally: AAPL history import worked and a polled

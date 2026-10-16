@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getWatchlistQuotes } from "@/api/watchlist";
 import { getAlerts } from "@/api/alerts";
+import { getMarketStatus } from "@/api/market";
 import {
     Activity,
     Bell,
@@ -8,6 +9,25 @@ import {
     Star,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+/** "4:00 PM ET" today, or "Mon 9:30 AM ET" on another day. */
+function formatEastern(iso: string): string {
+    const date = new Date(iso);
+    const easternDay = (d: Date) =>
+        d.toLocaleDateString("en-US", { timeZone: "America/New_York" });
+
+    const time = date.toLocaleTimeString("en-US", {
+        timeZone: "America/New_York",
+        hour: "numeric",
+        minute: "2-digit",
+    });
+
+    const day = easternDay(date) === easternDay(new Date())
+        ? ""
+        : `${date.toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short" })} `;
+
+    return `${day}${time} ET`;
+}
 
 function Dashboard() {
     const watchlistQuery = useQuery({
@@ -18,6 +38,14 @@ function Dashboard() {
     const alertsQuery = useQuery({
         queryKey: ["alerts"],
         queryFn: getAlerts,
+    });
+
+    const marketQuery = useQuery({
+        queryKey: ["market-status"],
+        queryFn: getMarketStatus,
+        // Changes at most twice a day; re-check each minute so the card flips
+        // at the open and close without a reload.
+        refetchInterval: 60_000,
     });
 
     const stocks = watchlistQuery.data ?? [];
@@ -92,11 +120,17 @@ function Dashboard() {
 
                     <CardContent>
                         <div className="text-2xl font-semibold">
-                            Open
+                            {marketQuery.data
+                                ? marketQuery.data.isOpen
+                                    ? "Open"
+                                    : "Closed"
+                                : "—"}
                         </div>
 
                         <p className="text-xs text-muted-foreground">
-                            U.S. markets
+                            {marketQuery.data
+                                ? `U.S. markets · ${marketQuery.data.isOpen ? "closes" : "opens"} ${formatEastern(marketQuery.data.nextChange)}`
+                                : "U.S. markets"}
                         </p>
                     </CardContent>
                 </Card>

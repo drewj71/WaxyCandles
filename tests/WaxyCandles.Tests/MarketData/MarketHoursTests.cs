@@ -79,6 +79,24 @@ public class MarketHoursTests
             await MarketHours.NextOpenAsync(DateTimeOffset.Parse(utc), Holidays));
     }
 
+    [Theory]
+    // Mid-session: open, closing at 16:00 EDT today.
+    [InlineData("2026-09-02T15:00:00Z", true, "2026-09-02T20:00:00Z")]
+    // After the close: closed until tomorrow's open.
+    [InlineData("2026-09-02T21:00:00Z", false, "2026-09-03T13:30:00Z")]
+    // Labor Day mid-session: closed until Tuesday.
+    [InlineData("2026-09-07T15:00:00Z", false, "2026-09-08T13:30:00Z")]
+    // EST: the close is 21:00Z.
+    [InlineData("2026-12-02T15:00:00Z", true, "2026-12-02T21:00:00Z")]
+    public async Task Status_says_whether_open_and_when_that_changes(
+        string utc, bool isOpen, string nextChangeUtc)
+    {
+        var status = await MarketHours.StatusAsync(DateTimeOffset.Parse(utc), Holidays);
+
+        Assert.Equal(isOpen, status.IsOpen);
+        Assert.Equal(DateTimeOffset.Parse(nextChangeUtc), status.NextChange);
+    }
+
     [Fact]
     public async Task Calendar_that_never_opens_falls_back_to_the_next_weekday_open()
     {

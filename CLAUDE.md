@@ -30,7 +30,7 @@ For an end-to-end run, RabbitMQ plus the API and all three workers must be runni
 
 EF Core migrations live in `src/WaxyCandles.Infrastructure/Migrations` and are committed to source control.
 
-The test project (`tests/WaxyCandles.Tests`) currently has minimal coverage (xunit scaffold only) — do not assume behavior is pinned by existing tests. When writing integration tests, prefer real SQL Server and RabbitMQ (e.g. Testcontainers) over mocking the infrastructure.
+The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX and tracing, about 400 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. A full run takes about 7 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
 
 ### Frontend (from `web/`)
 

@@ -1,4 +1,5 @@
 using WaxyCandles.Application.MarketData.Interfaces;
+using WaxyCandles.Application.MarketData.Models;
 
 namespace WaxyCandles.Application.MarketData;
 
@@ -93,11 +94,30 @@ public static class MarketHours
         return first;
     }
 
-    private static DateTimeOffset SessionOpen(DateOnly date)
+    /// <summary>
+    /// Whether the regular session is open now, and when it next changes:
+    /// today's close if open, else the next open on a day the calendar says trades.
+    /// </summary>
+    public static async Task<MarketStatus> StatusAsync(
+        DateTimeOffset now,
+        IMarketCalendar calendar,
+        CancellationToken cancellationToken = default)
     {
-        var open = date.ToDateTime(TimeOnly.FromTimeSpan(Open));
+        if (await IsOpenAsync(now, calendar, cancellationToken))
+        {
+            return new MarketStatus(true, SessionTime(TradingDate(now), Close));
+        }
+
+        return new MarketStatus(false, await NextOpenAsync(now, calendar, cancellationToken));
+    }
+
+    private static DateTimeOffset SessionOpen(DateOnly date) => SessionTime(date, Open);
+
+    private static DateTimeOffset SessionTime(DateOnly date, TimeSpan timeOfDay)
+    {
+        var time = date.ToDateTime(TimeOnly.FromTimeSpan(timeOfDay));
 
         // The offset of that date, not today's, so a DST switch in between is honoured.
-        return new DateTimeOffset(open, MarketTimeZone.GetUtcOffset(open));
+        return new DateTimeOffset(time, MarketTimeZone.GetUtcOffset(time));
     }
 }
