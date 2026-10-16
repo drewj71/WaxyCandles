@@ -1,9 +1,12 @@
 using WaxyCandles.Infrastructure;
+using WaxyCandles.Infrastructure.Telemetry;
 using WaxyCandles.PricePollingWorker;
 
 
 var builder =
     Host.CreateApplicationBuilder(args);
+
+builder.AddWaxyCandlesTelemetry("price-polling-worker");
 
 
 builder.Services.AddInfrastructure(builder.Configuration);

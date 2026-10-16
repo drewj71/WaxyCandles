@@ -4,6 +4,7 @@ using WaxyCandles.Application.Alerts.Messages;
 using WaxyCandles.Application.Notifications.DTOs;
 using WaxyCandles.Application.Notifications.Interfaces;
 using WaxyCandles.Infrastructure.Messaging;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.Infrastructure.Notifications;
 
@@ -76,6 +77,8 @@ public class AlertTriggeredConsumer : RabbitMqConsumer<AlertTriggeredMessage>
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         pushTimeout.CancelAfter(PushTimeout);
 
+        using var activity = WaxyCandlesTelemetry.Source.StartActivity("signalr push");
+
         try
         {
             await scopedServices
@@ -84,6 +87,9 @@ public class AlertTriggeredConsumer : RabbitMqConsumer<AlertTriggeredMessage>
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
+            activity?.AddException(ex);
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, "Push failed");
+
             // Includes the push timing out. Only a shutdown propagates.
             _logger.LogWarning(
                 ex,

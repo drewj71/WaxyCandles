@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -5,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.Infrastructure.Messaging;
 
@@ -279,11 +281,27 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         CancellationToken stoppingToken)
     {
         var body = eventArgs.Body.ToArray();
+        var retryCount = RetryHeaders.GetRetryCount(eventArgs.BasicProperties);
+
+        // Continues the trace from the message headers (a new trace if there
+        // are none). Each delivery attempt, retries included, is its own
+        // span under the same publish.
+        using var activity = WaxyCandlesTelemetry.Source.StartActivity(
+            $"process {_topology.Queue}",
+            ActivityKind.Consumer,
+            MessageTracing.FromHeaders(eventArgs.BasicProperties));
+
+        activity?.SetTag(WaxyCandlesTelemetry.MessagingSystem, "rabbitmq");
+        activity?.SetTag(WaxyCandlesTelemetry.MessagingDestination, _topology.Queue);
+        activity?.SetTag(WaxyCandlesTelemetry.RetryCount, retryCount);
 
         var message = TryDeserialize(body);
 
         if (message is null)
         {
+            activity?.SetTag(WaxyCandlesTelemetry.Outcome, "dead-lettered (unreadable)");
+            activity?.SetStatus(ActivityStatusCode.Error, "Unreadable message");
+
             // A message we can't read will never succeed, so retrying it is
             // pointless. Park it in the dead-letter queue for inspection.
             _logger.LogWarning(
@@ -293,6 +311,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
             await PublishToDeadLetterAsync(
                 channel,
                 body,
+                eventArgs.BasicProperties,
                 stoppingToken);
 
             await channel.BasicAckAsync(
@@ -304,7 +323,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         }
 
         var messageId = GetMessageId(message);
-        var retryCount = RetryHeaders.GetRetryCount(eventArgs.BasicProperties);
+        activity?.SetTag(WaxyCandlesTelemetry.MessagingMessageId, messageId.ToString());
 
         try
         {
@@ -319,6 +338,8 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 eventArgs.DeliveryTag,
                 multiple: false,
                 stoppingToken);
+
+            activity?.SetTag(WaxyCandlesTelemetry.Outcome, outcome.ToString());
 
             switch (outcome)
             {
@@ -350,6 +371,9 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         }
         catch (Exception ex)
         {
+            activity?.AddException(ex);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+
             _logger.LogError(
                 ex,
                 "Error processing message {MessageId}. Retry count: {RetryCount}",
@@ -362,9 +386,12 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                     "Message {MessageId} has reached the maximum retry count. Sending to dead-letter queue.",
                     messageId);
 
+                activity?.SetTag(WaxyCandlesTelemetry.Outcome, "dead-lettered (retries exhausted)");
+
                 await PublishToDeadLetterAsync(
                     channel,
                     body,
+                    eventArgs.BasicProperties,
                     stoppingToken);
 
                 await channel.BasicAckAsync(
@@ -377,15 +404,24 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
 
             var nextRetryCount = retryCount + 1;
 
+            activity?.SetTag(
+                WaxyCandlesTelemetry.Outcome,
+                $"retry {nextRetryCount}/{_topology.MaxRetries} scheduled");
+
+            var headers = new Dictionary<string, object?>
+            {
+                [RetryHeaders.RetryCount] =
+                    RetryHeaders.Encode(nextRetryCount)
+            };
+
+            // The retry joins the same trace, under the original publish.
+            MessageTracing.CopyHeaders(eventArgs.BasicProperties, headers);
+
             var properties =
                 new BasicProperties
                 {
                     Persistent = true,
-                    Headers = new Dictionary<string, object?>
-                    {
-                        [RetryHeaders.RetryCount] =
-                            RetryHeaders.Encode(nextRetryCount)
-                    }
+                    Headers = headers
                 };
 
             // mandatory: if the retry queue is missing, fail (and requeue the
@@ -437,15 +473,21 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
     private async Task PublishToDeadLetterAsync(
         IChannel channel,
         byte[] body,
+        IReadOnlyBasicProperties? original,
         CancellationToken cancellationToken)
     {
+        // Keeps the trace, so a dead-lettered message can be traced back to
+        // the price (or alert) that produced it.
+        var headers = new Dictionary<string, object?>();
+        MessageTracing.CopyHeaders(original, headers);
+
         // mandatory: if the dead-letter queue is missing, fail (and requeue the
         // original) rather than have the broker confirm a dropped message.
         await channel.BasicPublishAsync(
             exchange: _topology.DeadLetterExchange,
             routingKey: QueueTopology.DeadLetterRoutingKey,
             mandatory: true,
-            basicProperties: new BasicProperties { Persistent = true },
+            basicProperties: new BasicProperties { Persistent = true, Headers = headers },
             body: body,
             cancellationToken: cancellationToken);
     }

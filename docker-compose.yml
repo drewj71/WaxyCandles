@@ -1,5 +1,6 @@
-# Infrastructure for local development: RabbitMQ only. Run the .NET projects
-# with `dotnet run` against it (SQL Server runs locally, outside Docker).
+# Infrastructure for local development: RabbitMQ and the trace dashboard. Run
+# the .NET projects with `dotnet run` against it (SQL Server runs locally,
+# outside Docker).
 #   docker compose up -d
 #
 # To run the whole stack in containers instead, see docker-compose.app.yml.
@@ -17,3 +18,18 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  # Traces and logs from the API and workers (OpenTelemetry over OTLP), at
+  # http://localhost:18888. The .NET projects send to localhost:4317 when run
+  # with `dotnet run` (OTEL_EXPORTER_OTLP_ENDPOINT in launchSettings.json).
+  # In-memory only: everything is gone when the container restarts.
+  dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:13.5.2
+    container_name: waxycandles-dashboard
+    environment:
+      # Local development only: no login on the dashboard UI.
+      ASPIRE_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
+    ports:
+      - "18888:18888"
+      # OTLP over gRPC.
+      - "4317:18889"

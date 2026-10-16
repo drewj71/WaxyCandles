@@ -30,6 +30,8 @@ x-database: &database
 
 x-messaging: &messaging
   RabbitMQ__Host: rabbitmq
+  # Traces and logs to the dashboard (docker-compose.yml), http://localhost:18888.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://dashboard:18889
 
 x-jwt: &jwt
   Jwt__Secret: ${JWT_SECRET:?Set JWT_SECRET in .env}

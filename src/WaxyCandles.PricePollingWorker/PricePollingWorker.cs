@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using WaxyCandles.Application.Alerts.Interfaces;
 using WaxyCandles.Application.MarketData;
 using WaxyCandles.Application.MarketData.Interfaces;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.PricePollingWorker;
 
@@ -66,6 +67,9 @@ public class PricePollingWorker : BackgroundService
                 // today's levels.
                 await RefreshGexLevelsIfDueAsync(now, stoppingToken);
 
+                // The root of each price's trace.
+                using var activity = WaxyCandlesTelemetry.Source.StartActivity("poll prices");
+
                 using var scope = _scopeFactory.CreateScope();
 
                 var marketDataService =
@@ -113,6 +117,7 @@ public class PricePollingWorker : BackgroundService
 
         try
         {
+            using var activity = WaxyCandlesTelemetry.Source.StartActivity("refresh GEX level alerts");
             using var scope = _scopeFactory.CreateScope();
 
             var refresher = scope.ServiceProvider

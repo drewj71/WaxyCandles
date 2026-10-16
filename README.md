@@ -478,6 +478,31 @@ Option chains have their own interface, as not every stock data vendor has optio
 
 ---
 
+# Distributed Tracing
+
+One price update passes through four processes (price polling worker, outbox worker, alert worker, API) and two hand-offs that aren't calls: an outbox row and a RabbitMQ message. OpenTelemetry tracing follows it across all of them, so its whole journey is one timeline in the dashboard:
+
+```text
+poll prices                                  PricePollingWorker
+├─ GET api.marketdata.app/v1/stocks/prices   (outgoing HTTP, automatic)
+└─ store price  [AAPL]
+   ├─ publish stock-price-updated            OutboxWorker   (waited in the outbox: waxycandles.outbox.wait_ms)
+   │  └─ process stock-price-updated         AlertWorker    (one span per attempt; retries tagged)
+   │     └─ publish alert-triggered          OutboxWorker
+   │        └─ process alert-triggered       API
+   │           └─ signalr push
+   └─ ...
+```
+
+* The trace context (W3C `traceparent`) is saved in the outbox row in the same transaction as the business write, then carried in the RabbitMQ message headers, including onto retry and dead-letter publishes, so a retried or dead-lettered message stays in its original trace.
+* SQL commands and outgoing HTTP calls are traced automatically, and every log line carries its span's trace ID, so the dashboard shows each span's logs.
+* Tracing is on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set: in each project's `launchSettings.json` (the local dashboard at `localhost:4317`) and in `docker-compose.app.yml`. Unset, nothing is recorded. Sampling follows the standard `OTEL_TRACES_SAMPLER` settings (default: every trace).
+* Tracing never affects message handling: a row or message without trace context (or with a malformed one) just starts a new trace.
+
+The dashboard is the standalone [.NET Aspire dashboard](https://learn.microsoft.com/dotnet/aspire/fundamentals/dashboard/standalone), in-memory only and with no login, for local development.
+
+---
+
 # Database
 
 Entity Framework Core manages the SQL Server database.
@@ -509,11 +534,13 @@ EF Core migrations are committed to source control so the database schema can be
 * RabbitMQ
 * Market Data (marketdata.app) API token, or an Alpha Vantage API key
 
-RabbitMQ can be started using Docker Compose.
+RabbitMQ and the trace dashboard can be started using Docker Compose.
 
 ```bash
 docker compose up -d
 ```
+
+Traces and logs from the API and workers then show up at `http://localhost:18888` (see [Distributed Tracing](#distributed-tracing)).
 
 The RabbitMQ management interface is available locally on:
 
@@ -580,7 +607,7 @@ docker compose -f docker-compose.app.yml up -d --build
 
 The API is available on `http://localhost:5148`, the same as with `dotnet run`, so the Vite dev server works against it unchanged. The containerised SQL Server is exposed on port `14333` so it doesn't clash with a local SQL Server on `1433`.
 
-Plain `docker compose up -d` still starts only RabbitMQ for local development.
+Plain `docker compose up -d` still starts only RabbitMQ and the trace dashboard for local development.
 
 ---
 
@@ -674,6 +701,8 @@ All protected endpoints require authentication.
 * [x] In-app alert notifications (SignalR)
 * [x] Options chains (Market Data)
 * [x] GEX and VEX heatmap by strike and expiration
+* [x] GEX level alerts
+* [x] Distributed tracing (OpenTelemetry) across the outbox and RabbitMQ
 
 ### In Progress / Planned
 
@@ -686,7 +715,7 @@ All protected endpoints require authentication.
 * [ ] Market news
 * [ ] AI-powered market analysis
 * [ ] Redis caching
-* [ ] Observability and distributed tracing
+* [ ] Metrics and production observability
 * [ ] Production deployment
 * [ ] Additional cloud infrastructure
 

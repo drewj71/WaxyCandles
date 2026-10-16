@@ -5,8 +5,14 @@ using System.Text.Json.Serialization;
 using WaxyCandles.Api.Hubs;
 using WaxyCandles.Application.Notifications.Interfaces;
 using WaxyCandles.Infrastructure.Notifications;
+using WaxyCandles.Infrastructure.Telemetry;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.AddWaxyCandlesTelemetry(
+    "api",
+    tracing => tracing.AddAspNetCoreInstrumentation());
 
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddApiAuthentication(builder.Configuration);

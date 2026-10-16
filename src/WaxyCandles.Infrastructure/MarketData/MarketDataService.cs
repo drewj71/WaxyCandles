@@ -5,6 +5,7 @@ using WaxyCandles.Application.MarketData.Messages;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Infrastructure.Alerts;
 using WaxyCandles.Infrastructure.Persistence;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.Infrastructure.MarketData;
 
@@ -86,6 +87,11 @@ public class MarketDataService : IMarketDataService
                 timestamp <= latest)
                 continue;
 
+            // One span per symbol, so each price's journey (outbox, alert
+            // evaluation, notification) is its own branch of the poll's trace.
+            using var activity = WaxyCandlesTelemetry.Source.StartActivity("store price");
+            activity?.SetTag(WaxyCandlesTelemetry.Symbol, symbol);
+
             var stockPrice = new StockPrice
             {
                 Id = Guid.NewGuid(),
@@ -111,6 +117,9 @@ public class MarketDataService : IMarketDataService
                 Payload = JsonSerializer.Serialize(message),
                 CreatedAt = polledAt
             };
+
+            activity?.SetTag(WaxyCandlesTelemetry.MessagingMessageId, message.MessageId.ToString());
+            MessageTracing.Stamp(outboxMessage);
 
             _dbContext.StockPrices.Add(stockPrice);
             _dbContext.OutboxMessages.Add(outboxMessage);

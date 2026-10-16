@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Infrastructure.Identity;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.Infrastructure.Persistence;
 
@@ -88,6 +89,15 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
                 .WithMany()
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<OutboxMessage>(entity =>
+        {
+            entity.Property(x => x.TraceParent)
+                .HasMaxLength(MessageTracing.TraceParentMaxLength);
+
+            entity.Property(x => x.TraceState)
+                .HasMaxLength(MessageTracing.TraceStateMaxLength);
         });
 
         builder.Entity<RefreshToken>(entity =>

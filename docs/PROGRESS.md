@@ -12,6 +12,8 @@ Update this at the end of each working session.
 - [ ] **Live-test GEX level alerts** (`feat/gex-level-alerts`): create one from a GEX level card,
   check the next morning's refresh log ("Alert ...: SPY King is at ...; target now ..."), and that a
   notification reads "SPY rose above $X, approaching its King node at $Y".
+- [ ] **Look at a real trace**: `docker compose up -d`, run the API and workers, open
+  http://localhost:18888 and follow a price from poll to notification (`feat/distributed-tracing`).
 - [ ] **GEX follow-ups**: % of King display, node velocity (needs stored snapshots), a GEX panel on
   the stock page.
 - [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
@@ -22,6 +24,18 @@ Update this at the end of each working session.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
 
 ## Log
+
+### 2026-10-16
+- `feat/distributed-tracing`: OpenTelemetry traces and logs from the API and all workers to a local
+  .NET Aspire dashboard (`docker compose up -d`, http://localhost:18888). Trace context crosses the
+  outbox (new nullable `OutboxMessage.TraceParent`/`TraceState`, migration `AddOutboxTraceContext`)
+  and RabbitMQ (`traceparent` headers, copied onto retry and dead-letter publishes), so a price is one
+  trace from poll to SignalR push. On only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (it is in
+  launchSettings). No change to routing, retry counts/delays, topology or idempotency.
+- messaging-reviewer: no significant findings. Deploy order matters: apply `AddOutboxTraceContext`
+  before running the new code (EF now names the columns, so against an old schema the alert worker
+  would dead-letter alert-firing prices and the poller/outbox would fail), and roll back code before
+  schema. Docker's migrator enforces this; with `dotnet run`, run `dotnet ef database update` first.
 
 ### 2026-10-15
 - Tested MarketData.app end to end locally: AAPL history import worked and a polled

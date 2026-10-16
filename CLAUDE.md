@@ -18,7 +18,7 @@ dotnet run --project src/WaxyCandles.Api
 dotnet run --project src/WaxyCandles.PricePollingWorker
 dotnet run --project src/WaxyCandles.AlertWorker
 dotnet run --project src/WaxyCandles.OutboxWorker
-docker compose up -d                   # start RabbitMQ only (management UI at localhost:15672)
+docker compose up -d                   # RabbitMQ (UI localhost:15672) + trace dashboard (localhost:18888)
 docker compose -f docker-compose.app.yml up -d --build   # whole stack in containers (needs root .env)
 ```
 
@@ -75,6 +75,10 @@ Market data access is abstracted behind `IMarketDataProvider` (Application layer
 ### Options and GEX
 
 `GET /api/stocks/{symbol}/gex` (web page `/gex`) is synchronous request/response, outside the messaging pipeline. `GexService` (Infrastructure/Options) takes a quote to centre the strike window, fetches that slice of the chain through `IOptionsDataProvider` (Market Data only; separate from `IMarketDataProvider`), and `GexCalculator` (Application/Options/Gex) builds the strike × expiration table, with calls positive and puts negative under the naive dealer model. Provider gamma is used when present, else Black-Scholes from the provider's IV or IV solved from the mid. Vanna is always Black-Scholes. Boards are cached in memory per symbol/days/range for `Gex:CacheDuration` (default 1 minute, misses included). Market Data bills live/delayed chains per contract, so keep requests windowed; `MarketDataApp:OptionsMode` = `cached` (paid plans only) makes it 1 credit per request. Trial accounts get the previous session's chain.
+
+### Distributed tracing
+
+OpenTelemetry, registered by `AddWaxyCandlesTelemetry(serviceName)` (Infrastructure/Telemetry) in each `Program.cs`, and only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (it is in every `launchSettings.json`, pointing at the Aspire dashboard from `docker-compose.yml`). Traces include the app's spans (`WaxyCandlesTelemetry.Source`), outgoing HTTP, SQL and, in the API, incoming requests; logs carry their span's trace ID. Trace context crosses the outbox in `OutboxMessage.TraceParent`/`TraceState` (`MessageTracing.Stamp` when the row is written) and RabbitMQ in `traceparent`/`tracestate` headers (injected by the outbox publisher; read by `RabbitMqConsumer`, which also copies them onto retry and dead-letter publishes). So one price is one trace: poll → store price → publish → process (each attempt a span) → alert outbox row → publish → process → SignalR push. Any new outbox write should call `MessageTracing.Stamp`. Tracing never affects processing: missing or malformed context starts a new trace, and with no listener nothing is recorded.
 
 ### GEX level alerts
 

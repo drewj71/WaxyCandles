@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -6,6 +7,7 @@ using WaxyCandles.Application.Alerts.Messages;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Domain.Enums;
 using WaxyCandles.Infrastructure.Persistence;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.Infrastructure.Alerts;
 
@@ -185,12 +187,25 @@ public class AlertEvaluationService : IAlertEvaluationService
             LevelPrice = alert.LevelPrice
         };
 
-        _dbContext.OutboxMessages.Add(new OutboxMessage
+        var outboxMessage = new OutboxMessage
         {
             Id = message.MessageId,
             Type = nameof(AlertTriggeredMessage),
             Payload = JsonSerializer.Serialize(message),
             CreatedAt = message.TriggeredAt
-        });
+        };
+
+        // Evaluated inside the price message's "process" span, so the
+        // notification joins the trace of the price that fired it.
+        MessageTracing.Stamp(outboxMessage);
+        Activity.Current?.AddEvent(new ActivityEvent(
+            "alert fired",
+            tags: new ActivityTagsCollection
+            {
+                ["waxycandles.alert_id"] = alert.Id.ToString(),
+                [WaxyCandlesTelemetry.Symbol] = alert.Symbol
+            }));
+
+        _dbContext.OutboxMessages.Add(outboxMessage);
     }
 }

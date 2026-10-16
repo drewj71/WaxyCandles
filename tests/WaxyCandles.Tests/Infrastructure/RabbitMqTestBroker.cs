@@ -43,7 +43,9 @@ public sealed class RabbitMqTestBroker : IAsyncDisposable
     public Task PublishAsync(StockPriceUpdatedMessage message) =>
         PublishAsync(Serialize(message));
 
-    public async Task PublishAsync(byte[] body)
+    public async Task PublishAsync(
+        byte[] body,
+        IDictionary<string, object?>? headers = null)
     {
         await using var channel = await _connection.CreateChannelAsync();
 
@@ -51,7 +53,7 @@ public sealed class RabbitMqTestBroker : IAsyncDisposable
             exchange: string.Empty,
             routingKey: MainQueue,
             mandatory: false,
-            basicProperties: new BasicProperties { Persistent = true },
+            basicProperties: new BasicProperties { Persistent = true, Headers = headers },
             body: body);
     }
 

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 using WaxyCandles.Infrastructure.Messaging;
 using WaxyCandles.Infrastructure.Persistence;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.OutboxWorker;
 
@@ -192,9 +194,27 @@ public class OutboxPublisherWorker : BackgroundService
                 // the query can select "Type " for "Type".
                 var topology = MessageRoutes.ByMessageType[message.Type.TrimEnd()];
 
+                // Continues the trace of whatever wrote the row; the gap
+                // between that span and this one is the time spent waiting
+                // in the outbox.
+                using var activity = WaxyCandlesTelemetry.Source.StartActivity(
+                    $"publish {topology.Queue}",
+                    ActivityKind.Producer,
+                    MessageTracing.FromOutbox(message));
+
+                activity?.SetTag(WaxyCandlesTelemetry.MessagingSystem, "rabbitmq");
+                activity?.SetTag(WaxyCandlesTelemetry.MessagingDestination, topology.Queue);
+                activity?.SetTag(WaxyCandlesTelemetry.MessagingMessageId, message.Id.ToString());
+                activity?.SetTag(
+                    WaxyCandlesTelemetry.OutboxWaitMs,
+                    (long)(DateTimeOffset.UtcNow - message.CreatedAt).TotalMilliseconds);
+
                 var body =
                     Encoding.UTF8.GetBytes(
                         message.Payload);
+
+                var headers = new Dictionary<string, object?>();
+                MessageTracing.InjectCurrent(headers);
 
                 var properties =
                     new BasicProperties
@@ -202,7 +222,8 @@ public class OutboxPublisherWorker : BackgroundService
                         Persistent = true,
                         MessageId = message.Id.ToString(),
                         Type = message.Type,
-                        ContentType = "application/json"
+                        ContentType = "application/json",
+                        Headers = headers
                     };
 
                 // mandatory: an unroutable message (e.g. the queue was
