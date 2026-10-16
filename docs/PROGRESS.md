@@ -5,11 +5,12 @@ Update this at the end of each working session.
 
 ## Next up
 
-- [ ] **Push `feat/marketdata-app-provider` and open a PR** (tested end to end 2026-10-15).
-- [ ] **Push `feat/realtime-polling`** (branched from the above; PR after it merges).
-  Not yet tried live; run the polling worker during market hours to confirm.
-- [ ] **Options data** via MarketData.app: separate `IOptionsDataProvider` (not a bigger
-  `IMarketDataProvider`). Filter chains by strike/expiration, as each contract returned costs a credit.
+- [ ] **Live-test the polling worker** (merged to `master` 2026-10-15, not yet run live):
+  during market hours (prices stored with quote time, one batched call per poll) and after the
+  close (logs "Market closed. Next price poll at ...", no calendar warnings, so the trial
+  allows `markets/status`). Market Data trial ends ~2026-11-13.
+- [ ] **GEX follow-ups**: % of King display, node velocity (needs stored snapshots), GEX alerts
+  (e.g. price approaching the King), a GEX panel on the stock page.
 - [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
   Lower priority now that MarketData.app `stocks/prices` is real-time.
   Open questions:
@@ -35,6 +36,14 @@ Update this at the end of each working session.
   cached a day). The worker skips closed days and sleeps to the next trading day's open. Falls
   back to "weekdays trade" on any failure (retry after 15 min). Half days count as open.
   Full suite: 286 tests pass.
+- `feat/marketdata-app-provider` and `feat/realtime-polling` merged to `master`.
+- `feat/gex-heatmap`: GEX/VEX heatmap (Skylit Heatseeker style) at `/gex?symbol=`. Strikes ×
+  expirations, viridis colouring, King/floor/ceiling/gatekeeper marks, 1W–6M expiries and ±5–30%
+  strikes. Backend: `IOptionsDataProvider` (Market Data `options/chain`, windowed by strike and
+  expiration; optional `MarketDataApp:OptionsMode`), `GexCalculator` with a Black-Scholes fallback
+  for missing gamma/IV, `GET /api/stocks/{symbol}/gex` cached a minute. Naive dealer model
+  (calls +, puts -). Trial plans get the previous session's chain; the page says so.
+  Tested locally against the real API: works.
 
 ### 2026-10-14
 - Started this progress log. Context from earlier sessions wasn't saved, so the history

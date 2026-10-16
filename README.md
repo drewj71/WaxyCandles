@@ -424,6 +424,25 @@ The goal is **at-least-once message delivery with idempotent consumers**.
 
 ---
 
+# Options and GEX
+
+The GEX page (`/gex?symbol=SPY`) shows dealer gamma exposure (GEX) and vanna exposure (VEX) as a heatmap: strikes down the side (highest first), expirations across the top, and each cell the net exposure at that strike and expiration, in the style of Skylit's Heatseeker.
+
+* **GEX** is the dollar delta dealers must trade per 1% move in the underlying: `gamma × open interest × 100 × price² × 0.01`. **VEX** is the dollar delta per 1 point rise in implied volatility: `vanna × open interest × 100 × price × 0.01`.
+* It uses the common naive dealer model: customers buy puts and sell calls, so calls count positive and puts negative. Positive nodes dampen moves; negative nodes amplify them.
+* Cells are coloured on viridis from the board's lowest value (purple) to its highest (yellow), so zero has no fixed colour. The **King** (largest absolute node) is starred; **F**loor and **C**eiling mark the largest nodes below and above the price, and **G**atekeeper the largest between the price and the King. The strike nearest the price is highlighted.
+* Controls: expirations out to 1 week, 1/3/6 months; strikes within ±5/10/20/30% of the price; GEX/VEX toggle. Settings live in the URL, so a link reopens the same board.
+
+Option chains come from Market Data's `options/chain` through `IOptionsDataProvider`. Market Data's gamma is used when present; otherwise gamma comes from Black-Scholes using the provider's IV, or IV solved from the contract's mid price. Vanna is always Black-Scholes. Each board is cached for a minute (`Gex:CacheDuration`), and the Black-Scholes risk-free rate is `Gex:RiskFreeRate` (default 0.04).
+
+Credits: live or delayed chains cost 1 credit **per contract** returned, which is why the request is limited to the chosen strike and expiration window. On a paid plan set `MarketDataApp:OptionsMode` to `cached` (1 credit per request, may be a few minutes old). Trial and free plans can't choose a mode and get the previous session's chain, which the page flags.
+
+```http
+GET /api/stocks/SPY/gex?days=30&strikeRange=10
+```
+
+---
+
 # Market Data Provider Abstraction
 
 Market data access is intentionally abstracted behind interfaces.
@@ -439,11 +458,14 @@ Infrastructure
      │
      ├── MarketDataAppMarketDataProvider
      └── AlphaVantageMarketDataProvider
+
+IOptionsDataProvider
+     └── MarketDataAppOptionsDataProvider
 ```
 
 This allows the application to change market-data vendors without changing controllers or business logic.
 
-Additional providers are planned as the project expands into intraday and options data.
+Option chains have their own interface, as not every stock data vendor has options.
 
 ---
 
@@ -538,6 +560,7 @@ MSSQL_SA_PASSWORD=   # sa password for the containerised SQL Server (SQL Server 
 JWT_SECRET=          # long random string, 32+ characters
 MARKETDATA_API_TOKEN=
 # Optional: MARKET_DATA_PROVIDER=AlphaVantage (default MarketDataApp) plus ALPHAVANTAGE_API_KEY=
+# Optional: MARKETDATA_OPTIONS_MODE=cached on a paid Market Data plan (leave unset on a trial)
 ```
 
 Then:
@@ -582,6 +605,12 @@ GET /api/stocks/AAPL/historical?interval=4
 
 ```http
 POST /api/stocks/AAPL/historical?interval=4
+```
+
+### Get the GEX table
+
+```http
+GET /api/stocks/SPY/gex?days=30&strikeRange=10
 ```
 
 ### Get watchlist
@@ -634,6 +663,8 @@ All protected endpoints require authentication.
 * [x] Dead-letter queues
 * [x] Message idempotency
 * [x] In-app alert notifications (SignalR)
+* [x] Options chains (Market Data)
+* [x] GEX and VEX heatmap by strike and expiration
 
 ### In Progress / Planned
 
@@ -641,10 +672,7 @@ All protected endpoints require authentication.
 * [ ] Interactive candlestick charts
 * [ ] Additional intraday market-data provider
 * [ ] Technical indicators
-* [ ] Options chains
 * [ ] Implied volatility analytics
-* [ ] GEX calculations
-* [ ] VEX calculations
 * [ ] Options flow / positioning analytics
 * [ ] Market news
 * [ ] AI-powered market analysis

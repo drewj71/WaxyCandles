@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Star } from "lucide-react";
+import { ArrowLeft, Flame, Star } from "lucide-react";
 import { Route } from "@/routes/_dashboard/stocks/$symbol";
 import { getStockDetails } from "@/api/stocks";
 
@@ -113,6 +113,19 @@ function Stock() {
                             <span className="sr-only">
                                 Add to watchlist
                             </span>
+                        </Button>
+
+                        <Button
+                            variant="outline"
+                            render={
+                                <Link
+                                    to="/gex"
+                                    search={{ symbol: stock.symbol }}
+                                />
+                            }
+                        >
+                            <Flame />
+                            GEX
                         </Button>
                     </div>
 

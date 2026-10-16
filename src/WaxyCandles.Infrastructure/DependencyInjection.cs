@@ -20,6 +20,8 @@ using WaxyCandles.Infrastructure.Watchlists;
 using WaxyCandles.Application.Watchlists.Interfaces;
 using WaxyCandles.Application.Notifications.Interfaces;
 using WaxyCandles.Infrastructure.Notifications;
+using WaxyCandles.Application.Options.Interfaces;
+using WaxyCandles.Infrastructure.Options;
 
 namespace WaxyCandles.Infrastructure;
 
@@ -43,6 +45,16 @@ public static class DependencyInjection
         services.AddScoped<INotificationService, NotificationService>();
 
         services.AddMarketDataProvider(configuration);
+
+        // Market Data is the only options vendor so far; it needs
+        // MarketDataApp:ApiToken only when a chain is requested.
+        services.AddHttpClient<
+            IOptionsDataProvider,
+            MarketDataAppOptionsDataProvider>();
+        services.AddMemoryCache();
+        services.Configure<GexOptions>(
+            configuration.GetSection(GexOptions.SectionName));
+        services.AddScoped<IGexService, GexService>();
 
         return services;
     }

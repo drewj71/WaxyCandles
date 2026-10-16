@@ -72,6 +72,10 @@ Projects under `src/` follow a clean/onion architecture:
 
 Market data access is abstracted behind `IMarketDataProvider` (Application layer) so vendors can be swapped without touching controllers or business logic. The non-secret `MarketData:Provider` setting picks one: `MarketDataApp` (marketdata.app, set in the API and PricePollingWorker appsettings and the default in Docker) or `AlphaVantage` (the fallback when unset). Both providers store daily candles at UTC midnight of the trading date, so candle dedup holds across a switch.
 
+### Options and GEX
+
+`GET /api/stocks/{symbol}/gex` (web page `/gex`) is synchronous request/response, outside the messaging pipeline. `GexService` (Infrastructure/Options) takes a quote to centre the strike window, fetches that slice of the chain through `IOptionsDataProvider` (Market Data only; separate from `IMarketDataProvider`), and `GexCalculator` (Application/Options/Gex) builds the strike × expiration table, with calls positive and puts negative under the naive dealer model. Provider gamma is used when present, else Black-Scholes from the provider's IV or IV solved from the mid. Vanna is always Black-Scholes. Boards are cached in memory per symbol/days/range for `Gex:CacheDuration` (default 1 minute, misses included). Market Data bills live/delayed chains per contract, so keep requests windowed; `MarketDataApp:OptionsMode` = `cached` (paid plans only) makes it 1 credit per request. Trial accounts get the previous session's chain.
+
 ### Async pipeline (Outbox pattern)
 
 Price updates, alert evaluation and notifications are decoupled via RabbitMQ and the Outbox pattern:

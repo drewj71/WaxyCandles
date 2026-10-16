@@ -12,7 +12,8 @@ internal static class MarketDataAppApi
 
     /// <summary>
     /// Sends an authenticated GET. Returns null when Market Data has no data for
-    /// the request (HTTP 404 or s = "no_data"); throws on any other failure.
+    /// the request (HTTP 404, s = "no_data", or HTTP 204, a cached-mode miss);
+    /// throws on any other failure.
     /// </summary>
     public static async Task<JsonDocument?> GetAsync(
         HttpClient httpClient,
@@ -37,7 +38,7 @@ internal static class MarketDataAppApi
             request,
             cancellationToken);
 
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)
         {
             return null;
         }

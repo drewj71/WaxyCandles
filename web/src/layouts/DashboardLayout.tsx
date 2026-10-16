@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
     BarChart3,
     Bell,
+    Flame,
     LayoutDashboard,
     LogOut,
     Settings,
@@ -56,6 +57,11 @@ const navigation = [
         title: "Markets",
         icon: BarChart3,
         href: "/",
+    },
+    {
+        title: "GEX",
+        icon: Flame,
+        href: "/gex",
     },
     {
         title: "Alerts",

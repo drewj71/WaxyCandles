@@ -41,6 +41,8 @@ x-market-data: &market-data
   MarketData__Provider: ${MARKET_DATA_PROVIDER:-MarketDataApp}
   MarketDataApp__ApiToken: ${MARKETDATA_API_TOKEN:?Set MARKETDATA_API_TOKEN in .env}
   AlphaVantage__ApiKey: ${ALPHAVANTAGE_API_KEY:-}
+  # cached on a paid plan; blank (the default) on a trial, which can't choose.
+  MarketDataApp__OptionsMode: ${MARKETDATA_OPTIONS_MODE:-}
 
 x-dotnet-service: &dotnet-service
   restart: unless-stopped

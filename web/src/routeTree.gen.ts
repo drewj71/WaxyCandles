@@ -14,6 +14,7 @@ import { Route as DashboardRouteRouteImport } from './routes/_dashboard/route'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardAlertsRouteImport } from './routes/_dashboard/alerts'
 import { Route as DashboardDashboardRouteImport } from './routes/_dashboard/dashboard'
+import { Route as DashboardGexRouteImport } from './routes/_dashboard/gex'
 import { Route as DashboardWatchlistRouteImport } from './routes/_dashboard/watchlist'
 import { Route as DashboardStocksSymbolRouteImport } from './routes/_dashboard/stocks/$symbol'
 
@@ -41,6 +42,11 @@ const DashboardDashboardRoute = DashboardDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => DashboardRouteRoute,
 } as any)
+const DashboardGexRoute = DashboardGexRouteImport.update({
+  id: '/gex',
+  path: '/gex',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
 const DashboardWatchlistRoute = DashboardWatchlistRouteImport.update({
   id: '/watchlist',
   path: '/watchlist',
@@ -57,6 +63,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/alerts': typeof DashboardAlertsRoute
   '/dashboard': typeof DashboardDashboardRoute
+  '/gex': typeof DashboardGexRoute
   '/watchlist': typeof DashboardWatchlistRoute
   '/stocks/$symbol': typeof DashboardStocksSymbolRoute
 }
@@ -65,6 +72,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/alerts': typeof DashboardAlertsRoute
   '/dashboard': typeof DashboardDashboardRoute
+  '/gex': typeof DashboardGexRoute
   '/watchlist': typeof DashboardWatchlistRoute
   '/stocks/$symbol': typeof DashboardStocksSymbolRoute
 }
@@ -75,16 +83,29 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_dashboard/alerts': typeof DashboardAlertsRoute
   '/_dashboard/dashboard': typeof DashboardDashboardRoute
+  '/_dashboard/gex': typeof DashboardGexRoute
   '/_dashboard/watchlist': typeof DashboardWatchlistRoute
   '/_dashboard/stocks/$symbol': typeof DashboardStocksSymbolRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/login' | '/alerts' | '/dashboard' | '/watchlist' | '/stocks/$symbol'
+    | '/'
+    | '/login'
+    | '/alerts'
+    | '/dashboard'
+    | '/gex'
+    | '/watchlist'
+    | '/stocks/$symbol'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/' | '/login' | '/alerts' | '/dashboard' | '/watchlist' | '/stocks/$symbol'
+    | '/'
+    | '/login'
+    | '/alerts'
+    | '/dashboard'
+    | '/gex'
+    | '/watchlist'
+    | '/stocks/$symbol'
   id:
     | '__root__'
     | '/'
@@ -92,6 +113,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/_dashboard/alerts'
     | '/_dashboard/dashboard'
+    | '/_dashboard/gex'
     | '/_dashboard/watchlist'
     | '/_dashboard/stocks/$symbol'
   fileRoutesById: FileRoutesById
@@ -139,6 +161,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardDashboardRouteImport
       parentRoute: typeof DashboardRouteRoute
     }
+    '/_dashboard/gex': {
+      id: '/_dashboard/gex'
+      path: '/gex'
+      fullPath: '/gex'
+      preLoaderRoute: typeof DashboardGexRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
     '/_dashboard/watchlist': {
       id: '/_dashboard/watchlist'
       path: '/watchlist'
@@ -159,6 +188,7 @@ declare module '@tanstack/react-router' {
 interface DashboardRouteRouteChildren {
   DashboardAlertsRoute: typeof DashboardAlertsRoute
   DashboardDashboardRoute: typeof DashboardDashboardRoute
+  DashboardGexRoute: typeof DashboardGexRoute
   DashboardWatchlistRoute: typeof DashboardWatchlistRoute
   DashboardStocksSymbolRoute: typeof DashboardStocksSymbolRoute
 }
@@ -166,6 +196,7 @@ interface DashboardRouteRouteChildren {
 const DashboardRouteRouteChildren: DashboardRouteRouteChildren = {
   DashboardAlertsRoute: DashboardAlertsRoute,
   DashboardDashboardRoute: DashboardDashboardRoute,
+  DashboardGexRoute: DashboardGexRoute,
   DashboardWatchlistRoute: DashboardWatchlistRoute,
   DashboardStocksSymbolRoute: DashboardStocksSymbolRoute,
 }
