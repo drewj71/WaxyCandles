@@ -72,8 +72,10 @@ public class MarketDataAppMarketDataProvider : IMarketDataProvider
     {
         // stocks/prices, not stocks/quotes: quotes are delayed or a day old unless
         // the account has the exchange agreements, while prices are real-time on
-        // every plan. The price is a SmartMid (bid/ask midpoint), not the last
-        // trade, and the response has no volume.
+        // every paid plan. Free and trial accounts get prices at least 24 hours
+        // old (the previous close, served as a 203 from cache), which the poller
+        // then skips as not newer. The price is a SmartMid (bid/ask midpoint), not
+        // the last trade, and the response has no volume.
         using var document = await GetAsync(
             $"{BaseUrl}/stocks/prices/" +
             $"?symbols={string.Join(',', symbols.Select(Uri.EscapeDataString))}",

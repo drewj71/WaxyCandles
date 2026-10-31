@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, refreshSession } from "./client";
 
 export interface LoginRequest {
   email: string;
@@ -17,7 +17,7 @@ export async function login(
 }
 
 export async function refresh(): Promise<void> {
-  await api.post("/auth/refresh");
+  await refreshSession();
 }
 
 export async function logout(): Promise<void> {

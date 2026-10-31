@@ -22,6 +22,62 @@ type StockCandlestickChartProps = {
     timeframe: string;
 };
 
+const easternParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+});
+
+/**
+ * The chart's time for a candle. lightweight-charts shows every time as UTC,
+ * so an intraday candle is shifted to its Eastern wall-clock time (09:30, not
+ * 13:30/14:30 UTC). Daily candles are stored at UTC midnight of the trading
+ * date, which already reads as that date.
+ */
+function chartTime(timestamp: string, intraday: boolean): UTCTimestamp {
+    const date = new Date(timestamp);
+
+    if (!intraday) {
+        return Math.floor(date.getTime() / 1000) as UTCTimestamp;
+    }
+
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+        Number(
+            easternParts
+                .formatToParts(date)
+                .find((p) => p.type === type)!.value,
+        );
+
+    return (Date.UTC(
+        part("year"),
+        part("month") - 1,
+        part("day"),
+        part("hour"),
+        part("minute"),
+        part("second"),
+    ) / 1000) as UTCTimestamp;
+}
+
+function candleLabel(timestamp: string, intraday: boolean): string {
+    const date = new Date(timestamp);
+
+    return intraday
+        ? `${date.toLocaleString("en-US", {
+            timeZone: "America/New_York",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+        })} ET`
+        // UTC, or a daily candle reads as the day before west of Greenwich.
+        : date.toLocaleDateString("en-US", { timeZone: "UTC" });
+}
+
 function StockCandlestickChart({
     candles,
     timeframe,
@@ -38,8 +94,15 @@ function StockCandlestickChart({
     const volumeSeriesRef =
         useRef<ISeriesApi<"Histogram"> | null>(null);
 
+    // The candles currently drawn, by chart time, for the crosshair tooltip.
+    // A ref so the handler registered once at mount sees the latest data.
+    const candlesByTimeRef =
+        useRef(new Map<number, Candle>());
+
     const [hoveredCandle, setHoveredCandle] =
         useState<Candle | null>(null);
+
+    const intraday = timeframe !== "1D";
 
     useEffect(() => {
         if (!chartContainerRef.current) {
@@ -129,14 +192,9 @@ function StockCandlestickChart({
                 return;
             }
 
-            const candle = candles.find(
-                (candle) =>
-                    Math.floor(
-                        new Date(candle.timestamp).getTime() / 1000,
-                    ) === Number(param.time),
+            setHoveredCandle(
+                candlesByTimeRef.current.get(Number(param.time)) ?? null,
             );
-
-            setHoveredCandle(candle ?? null);
         });
 
         return () => {
@@ -158,17 +216,24 @@ function StockCandlestickChart({
             return;
         }
 
-        if (timeframe !== "1D") {
-            seriesRef.current.setData([]);
-            volumeSeriesRef.current.setData([]);
-            return;
-        }
+        // Intraday axes need times, not just dates.
+        chartRef.current?.applyOptions({
+            timeScale: {
+                timeVisible: intraday,
+                secondsVisible: false,
+            },
+        });
 
-        const chartData = candles.map((candle) => ({
-            time: Math.floor(
-                new Date(candle.timestamp).getTime() /
-                1000,
-            ) as UTCTimestamp,
+        const times = candles.map((candle) =>
+            chartTime(candle.timestamp, intraday),
+        );
+
+        candlesByTimeRef.current = new Map(
+            candles.map((candle, i) => [times[i], candle]),
+        );
+
+        const chartData = candles.map((candle, i) => ({
+            time: times[i],
 
             open: candle.open,
             high: candle.high,
@@ -176,11 +241,8 @@ function StockCandlestickChart({
             close: candle.close,
         }));
 
-        const volumeData = candles.map((candle) => ({
-            time: Math.floor(
-                new Date(candle.timestamp).getTime() /
-                1000,
-            ) as UTCTimestamp,
+        const volumeData = candles.map((candle, i) => ({
+            time: times[i],
 
             value: candle.volume,
 
@@ -196,7 +258,7 @@ function StockCandlestickChart({
         chartRef.current
             ?.timeScale()
             .fitContent();
-    }, [candles, timeframe]);
+    }, [candles, intraday]);
 
     return (
         <div
@@ -206,9 +268,10 @@ function StockCandlestickChart({
             {hoveredCandle && (
                 <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border bg-background/90 px-3 py-2 text-xs shadow-sm">
                     <div className="mb-1 font-medium">
-                        {new Date(
+                        {candleLabel(
                             hoveredCandle.timestamp,
-                        ).toLocaleDateString()}
+                            intraday,
+                        )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1">

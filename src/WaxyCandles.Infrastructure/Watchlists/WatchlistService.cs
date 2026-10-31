@@ -111,13 +111,24 @@ public class WatchlistService : IWatchlistService
                 .First())
             .ToListAsync(cancellationToken);
 
-        return latestPrices
-            .Select(x => new WatchlistStockDto
+        var latestBySymbol = latestPrices
+            .ToDictionary(x => x.Symbol);
+
+        // Every watchlist symbol is listed, in the order it was added. One with
+        // no stored price yet (newly added, before its first poll) has null
+        // price fields rather than being left out.
+        return symbols
+            .Select(symbol =>
             {
-                Symbol = x.Symbol,
-                Price = x.Price,
-                Change = x.Change,
-                ChangePercent = x.ChangePercent
+                latestBySymbol.TryGetValue(symbol, out var latest);
+
+                return new WatchlistStockDto
+                {
+                    Symbol = symbol,
+                    Price = latest?.Price,
+                    Change = latest?.Change,
+                    ChangePercent = latest?.ChangePercent
+                };
             })
             .ToList();
     }

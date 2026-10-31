@@ -144,6 +144,37 @@ public class CrossUserAuthorizationTests(IntegrationFixture fixture) : ApiTestBa
         Assert.Equal(150m, quote.Price);
     }
 
+    [Fact]
+    public async Task Watchlist_quotes_list_a_symbol_with_no_stored_price_yet()
+    {
+        (await _alice.Http.PostAsync("/api/watchlist/AAPL", null)).EnsureSuccessStatusCode();
+        (await _alice.Http.PostAsync("/api/watchlist/MSFT", null)).EnsureSuccessStatusCode();
+
+        await using (var db = NewDbContext())
+        {
+            db.StockPrices.Add(
+                new StockPrice { Id = Guid.NewGuid(), Symbol = "MSFT", Price = 300m, Change = 2m, ChangePercent = 0.67m });
+            await db.SaveChangesAsync();
+        }
+
+        var quotes = await _alice.Http.GetFromJsonAsync<List<WatchlistStockDto>>(
+            "/api/watchlist/quotes",
+            Json);
+
+        Assert.NotNull(quotes);
+
+        // In the order added, and AAPL is listed even though it hasn't been polled.
+        Assert.Equal(["AAPL", "MSFT"], quotes.Select(q => q.Symbol));
+
+        Assert.Null(quotes[0].Price);
+        Assert.Null(quotes[0].Change);
+        Assert.Null(quotes[0].ChangePercent);
+
+        Assert.Equal(300m, quotes[1].Price);
+        Assert.Equal(2m, quotes[1].Change);
+        Assert.Equal(0.67m, quotes[1].ChangePercent);
+    }
+
     private static async Task<AlertResponse> CreateAlertAsync(
         ApiClient client,
         string symbol,

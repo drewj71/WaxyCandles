@@ -2,9 +2,10 @@ import { api } from "./client";
 
 export interface WatchlistStock {
     symbol: string;
-    price: number;
-    change: number;
-    changePercent: number;
+    // Null until the price poller stores a first price for the symbol.
+    price: number | null;
+    change: number | null;
+    changePercent: number | null;
 }
 
 export async function getWatchlist(): Promise<string[]> {

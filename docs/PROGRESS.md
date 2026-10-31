@@ -22,13 +22,43 @@ Update this at the end of each working session.
 - [ ] **GEX follow-ups**: % of King display, node velocity (needs stored snapshots), a GEX panel on
   the stock page.
 - [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
-  Lower priority now that MarketData.app `stocks/prices` is real-time.
+  Lower priority once on a paid Market Data plan, where `stocks/prices` is real-time (not on the
+  trial; see 2026-10-28).
   Open questions:
   - OAuth 2.0 with browser login: ~30 min access tokens, ~7 day refresh tokens, so weekly manual
     re-auth. Need a token store and a re-auth story for the headless `PricePollingWorker`.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
 
 ## Log
+
+### 2026-10-28
+- Watchlist shows a newly added symbol immediately. `GET /api/watchlist/quotes` used to build its list
+  from stored `StockPrices`, so a symbol added to the watchlist stayed hidden until the poller's next
+  run (up to a minute, or until the next session outside market hours). It now lists every
+  watchlist symbol in `AddedAt` order, with nullable `Price`/`Change`/`ChangePercent` until a first
+  price exists. The page shows "—" and refetches every 30s while any price is missing. No change to
+  polling or messaging.
+- Session refresh: nothing called `POST /api/auth/refresh`, so the 15-minute access cookie expired
+  and every request 401'd. The axios client (`web/src/api/client.ts`) now refreshes on a 401 and
+  retries the request once; concurrent 401s share one refresh, since the API rotates the refresh
+  token. If the refresh is rejected, it retries once more, in case another tab rotated the token
+  first, then sends the user to `/login`. The notifications hub refreshes when it reconnects. Not
+  yet tested in a browser.
+- Found while running `docker-compose.app.yml`: Market Data answered polls with 203 and quotes at
+  the previous close (2026-10-27 16:01 ET) during regular hours, so the "only newer" check stored one
+  price per symbol and none after it, and alerts never fired. Confirmed in Market Data's Data
+  Freshness docs: `stocks/prices` is real-time only on paid plans; free and trial accounts get
+  "Historical (24-hour delayed)" data. The 2026-10-15 entry's "real-time on every plan" was wrong:
+  it came from the `stocks/prices` endpoint page, which the plan and Data Freshness pages
+  contradict. Corrected the provider and test comments. No code change needed after upgrading: the default mode is live on paid plans.
+- Intraday charts (1H/30m/15m/5m) were always empty: `StockCandlestickChart` cleared its data for
+  any timeframe but 1D, although the API returned the candles. Now drawn, with times on the axis,
+  in Eastern wall-clock time (lightweight-charts shows UTC, so intraday times are shifted). Also
+  fixed: the hover tooltip looked candles up from the first data it saw (the long-standing lint
+  warning), and daily tooltips showed the day before (UTC-midnight dates formatted in local time).
+- `scripts/fake-price.ps1 <SYMBOL> <PRICE> [-DryRun]`: writes a current-timestamped price and its
+  outbox row into the `docker-compose.app.yml` database, to test alerts and notifications end to
+  end without a live feed.
 
 ### 2026-10-16
 - `feat/distributed-tracing`: OpenTelemetry traces and logs from the API and all workers to a local

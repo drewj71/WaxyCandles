@@ -78,7 +78,7 @@ public class MarketDataAppMarketDataProviderTests
         await Provider().GetCurrentQuoteAsync(" brk.b ");
 
         var request = _handler.Requests.Single();
-        // stocks/prices is real-time on every plan; stocks/quotes is not.
+        // stocks/prices is real-time on every paid plan; stocks/quotes also needs exchange agreements.
         Assert.Equal("/v1/stocks/prices/", request.Uri.AbsolutePath);
         Assert.Equal("BRK.B", HttpUtility.ParseQueryString(request.Uri.Query)["symbols"]);
         Assert.Equal($"Bearer {TestApiToken}", request.Authorization);

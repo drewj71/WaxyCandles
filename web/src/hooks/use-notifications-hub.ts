@@ -7,6 +7,7 @@ import {
 } from "@microsoft/signalr";
 import { toast } from "sonner";
 
+import { refreshSession } from "@/api/client";
 import {
     notificationReceivedEvent,
     notificationsHubUrl,
@@ -68,6 +69,13 @@ export function useNotificationsHub() {
         // Pushes sent while disconnected are missed; the stored list isn't.
         connection.onreconnected(refresh);
 
+        // An open connection outlives the 15-minute access cookie, but a
+        // reconnect negotiates again and needs a valid one. Refresh while the
+        // first retry waits; a failure leaves the retries to report it.
+        connection.onreconnecting(() => {
+            void refreshSession().catch(() => undefined);
+        });
+
         // Automatic reconnect only covers a connection that was established, so
         // retry the initial start too (e.g. API restarting when the page loads).
         async function start(attempt: number) {
@@ -83,6 +91,9 @@ export function useNotificationsHub() {
                     "Notifications connection failed; retrying.",
                     error,
                 );
+
+                // The failure may be an expired access cookie.
+                void refreshSession().catch(() => undefined);
 
                 startTimer = setTimeout(
                     () => void start(attempt + 1),

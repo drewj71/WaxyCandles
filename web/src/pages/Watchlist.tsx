@@ -32,6 +32,15 @@ import {
 
 import { Link } from "@tanstack/react-router";
 
+/** "+1.23" / "-0.45", or "—" when there's no price yet. */
+function formatSigned(value: number | null, suffix = ""): string {
+    if (value === null) {
+        return "—";
+    }
+
+    return `${value >= 0 ? "+" : ""}${value.toFixed(2)}${suffix}`;
+}
+
 function Watchlist() {
     type WatchlistFormValues = {
         symbol: string;
@@ -52,6 +61,12 @@ function Watchlist() {
     const watchlistQuery = useQuery({
         queryKey: ["watchlist"],
         queryFn: getWatchlistQuotes,
+        // A newly added symbol has no price until the next poll (up to a
+        // minute, longer outside market hours); keep checking until it does.
+        refetchInterval: (query) =>
+            query.state.data?.some((stock) => stock.price === null)
+                ? 30_000
+                : false,
     });
 
     const addMutation = useMutation({
@@ -224,24 +239,20 @@ function Watchlist() {
                                             </TableCell>
 
                                             <TableCell className="text-right">
-                                                ${stock.price.toFixed(2)}
+                                                {stock.price === null
+                                                    ? "—"
+                                                    : `$${stock.price.toFixed(2)}`}
                                             </TableCell>
 
                                             <TableCell className="text-right">
-                                                {stock.change >= 0
-                                                    ? "+"
-                                                    : ""}
-                                                {stock.change.toFixed(2)}
+                                                {formatSigned(stock.change)}
                                             </TableCell>
 
                                             <TableCell className="text-right">
-                                                {stock.changePercent >= 0
-                                                    ? "+"
-                                                    : ""}
-                                                {stock.changePercent.toFixed(
-                                                    2,
+                                                {formatSigned(
+                                                    stock.changePercent,
+                                                    "%",
                                                 )}
-                                                %
                                             </TableCell>
 
                                             <TableCell>
