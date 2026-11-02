@@ -12,13 +12,31 @@ Update this at the end of each working session.
 - [ ] **Live-test GEX level alerts** (`feat/gex-level-alerts`): create one from a GEX level card,
   check the next morning's refresh log ("Alert ...: SPY King is at ...; target now ..."), and that a
   notification reads "SPY rose above $X, approaching its King node at $Y".
-- [ ] **Metrics and health checks** (next, agreed 2026-10-16): outbox backlog/age, queue depth,
+- [ ] **Roadmap Phase 1** (from the 2026-11-02 review; IDs below):
+  - DATA-2: a filtered index for pending outbox rows, and `OutboxMessage.Type` capped at `nvarchar(200)`.
+  - DATA-1: a retention job for processed outbox rows, `ProcessedMessages` (keep days, not minutes),
+    and old `StockPrices` (always keep the latest per symbol).
+  - MSG-1: retry and dead-letter publishes should keep `MessageId`/`Type` and record why a message failed.
+  - MSG-2: consumer prefetch (`BasicQos`); keep dispatch concurrency at 1.
+  - Migrations land one at a time.
+- [ ] **Metrics and health checks** (OPS-1/OPS-2, agreed 2026-10-16): outbox backlog/age, queue depth,
   dead-letter count, alerts fired, Market Data credits per day (for the plan decision before the
   trial ends ~2026-11-13); `/health` for the API and workers.
+- [ ] **Decisions needed from Phase 0**:
+  - `POST /api/stocks/{symbol}/historical` isn't called by the web app: keep it (now 5/min per user),
+    make it admin-only, or remove it?
+  - Forwarded headers and a trusted-proxy list before deploying behind a proxy, or the per-IP auth
+    limit is shared by every client.
+- [ ] **Phase 0 follow-ups**:
+  - The web app has no 429 handling (it shows the generic error).
+  - `RabbitMqConnection` connects synchronously and ignores cancellation; an async, cancellable
+    connect would fix slow shutdown when the broker host doesn't answer.
+  - Phase 2: SEC-3, refresh tokens stored hashed (forces one re-login).
 - [ ] **IV analytics on the GEX page**: ATM IV term structure and skew per expiration, from the
   chain already fetched.
 - [ ] **Housekeeping (needs you)**: delete the 11 merged branches (my attempt was blocked by the
-  permission check), and add `MARKETDATA_API_TOKEN=` to `.env.example` (I can't edit `.env*`).
+  permission check), and add `MARKETDATA_API_TOKEN=` and the optional `CORS_ALLOWED_ORIGIN=` to
+  `.env.example` (I can't edit `.env*`).
 - [ ] **GEX follow-ups**: % of King display, node velocity (needs stored snapshots), a GEX panel on
   the stock page.
 - [ ] **Schwab market data provider**: developer account applied for, access **pending** (as of 2026-10-14).
@@ -30,6 +48,28 @@ Update this at the end of each working session.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
 
 ## Log
+
+### 2026-11-02
+- Architecture review and a prioritized roadmap. I found no P0 issue for the current local-only
+  deployment. Two items would become P0 once the app is internet-facing: GEX/history credit
+  exhaustion and login brute force.
+- Phase 0 was done by two parallel agents in separate worktrees, then merged on `integration/phase0`.
+- `fix/outbox-startup-and-routing` (Workstream B):
+  - REL-1: the OutboxWorker no longer fails to start while RabbitMQ is down; it connects lazily and
+    retries every poll.
+  - MSG-3: an alert's outbox `CreatedAt` is now its write time, like price rows.
+  - MSG-4: stable `MessageType` constants with the old strings, so pending rows still route.
+  - No retry, dead-letter or idempotency change (messaging-reviewer: no defects).
+- `feat/api-security-hardening` (Workstream A):
+  - SEC-1: built-in rate limiting (GEX and alert create/update 30/min per user, history import
+    5/min per user); GEX chains fetched and cached by a ladder window (`GexFetchWindow`), so
+    near-identical requests can't each cost a billed fetch.
+  - SEC-2: login lockout (5 failures, then 5 min, same 401 as a wrong password) and an auth limit of
+    10/min per IP.
+  - CFG-1: `Cors:AllowedOrigins` (required), Swagger only in Development, `Jwt:Secret` validated
+    (≥ 32 bytes), optional RabbitMQ credentials and vhost, CORS before authentication.
+- Example appsettings files updated with the new keys. A `Jwt:Secret` shorter than 32 bytes in
+  user secrets now stops the API from starting.
 
 ### 2026-10-28
 - Watchlist shows a newly added symbol immediately. `GET /api/watchlist/quotes` used to build its list

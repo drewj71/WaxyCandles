@@ -15,23 +15,29 @@ public class OutboxPublisherWorker : BackgroundService
 
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
+    private readonly IServiceProvider _services;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly RabbitMqConnection _rabbitMqConnection;
     private readonly ILogger<OutboxPublisherWorker> _logger;
 
+    // RabbitMqConnection is deliberately not injected: it connects in its
+    // constructor, so injecting it would make constructing this hosted service
+    // (and so starting the host) fail while the broker is unreachable.
     public OutboxPublisherWorker(
+        IServiceProvider services,
         IServiceScopeFactory scopeFactory,
-        RabbitMqConnection rabbitMqConnection,
         ILogger<OutboxPublisherWorker> logger)
     {
+        _services = services;
         _scopeFactory = scopeFactory;
-        _rabbitMqConnection = rabbitMqConnection;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
+        // Let host startup finish before anything touches the broker.
+        await Task.Yield();
+
         IChannel? channel = null;
         var queueDeclared = false;
 
@@ -46,12 +52,19 @@ public class OutboxPublisherWorker : BackgroundService
 
                 try
                 {
+                    // Resolved per poll: the connection is opened on first
+                    // resolve, and DI doesn't cache a singleton whose
+                    // constructor threw, so a broker that is down at startup
+                    // is retried here after PollInterval like any publish error.
+                    var connection =
+                        _services.GetRequiredService<RabbitMqConnection>();
+
                     // Automatic recovery covers a lost connection, but not a
                     // channel the broker closed with a channel-level error.
                     // Without this the worker would fail every poll forever.
                     if (channel is null || channel.IsClosed)
                     {
-                        if (channel is not null && !_rabbitMqConnection.IsOpen)
+                        if (channel is not null && !connection.IsOpen)
                         {
                             // The connection itself is down; automatic recovery
                             // will reopen this channel. Skip this poll.
@@ -72,7 +85,7 @@ public class OutboxPublisherWorker : BackgroundService
                         // RabbitMQ has accepted (and, being persistent on a durable
                         // queue, stored) the message.
                         channel =
-                            await _rabbitMqConnection.CreateConfirmedChannelAsync(
+                            await connection.CreateConfirmedChannelAsync(
                                 stoppingToken);
 
                         queueDeclared = false;

@@ -11,15 +11,18 @@ namespace WaxyCandles.Infrastructure.Authentication;
 public class AuthService : IAuthService
 {
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly ITokenService _tokenService;
     private readonly AppDbContext _dbContext;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
+        SignInManager<ApplicationUser> signInManager,
         ITokenService tokenService,
         AppDbContext dbContext)
     {
         _userManager = userManager;
+        _signInManager = signInManager;
         _tokenService = tokenService;
         _dbContext = dbContext;
     }
@@ -88,11 +91,17 @@ public class AuthService : IAuthService
     public async Task<AuthResponse> LoginAsync(LoginRequest request)
     {
         var user = await _userManager.FindByEmailAsync(request.Email) ?? throw new InvalidCredentialsException();
-        var passwordValid = await _userManager.CheckPasswordAsync(
-            user,
-            request.Password);
 
-        if (!passwordValid)
+        // Counts failures towards Identity's lockout (IdentityOptions.Lockout),
+        // and refuses even the right password while the account is locked out.
+        // Locked out, wrong password and unknown email all get the same 401,
+        // so the response never reveals which it was.
+        var result = await _signInManager.CheckPasswordSignInAsync(
+            user,
+            request.Password,
+            lockoutOnFailure: true);
+
+        if (!result.Succeeded)
         {
             throw new InvalidCredentialsException();
         }

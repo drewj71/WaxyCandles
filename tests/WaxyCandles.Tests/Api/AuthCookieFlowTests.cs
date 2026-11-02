@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using WaxyCandles.Infrastructure.Identity;
@@ -270,6 +271,65 @@ public class AuthCookieFlowTests(IntegrationFixture fixture) : ApiTestBase(fixtu
 
         Assert.Equal("Invalid credentials.", await ErrorMessageAsync(wrongPassword));
         Assert.Equal("Invalid credentials.", await ErrorMessageAsync(unknownUser));
+    }
+
+    [Fact]
+    public async Task Repeated_wrong_passwords_lock_the_account_for_the_lockout_window()
+    {
+        // Same lockout policy as the app, with a window short enough to wait out.
+        var window = TimeSpan.FromSeconds(3);
+        var factory = Factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.Configure<IdentityOptions>(o => o.Lockout.DefaultLockoutTimeSpan = window)));
+
+        (await RegisterAsync(NewClient(factory).Http, "alice@example.com")).EnsureSuccessStatusCode();
+
+        var wrongPassword = await LoginAsync(NewClient(factory).Http, "alice@example.com", "WrongPassword1");
+        var wrongStatus = wrongPassword.StatusCode;
+        var wrongBody = await wrongPassword.Content.ReadAsStringAsync();
+
+        for (var i = 1; i < 5; i++)
+        {
+            Assert.Equal(
+                HttpStatusCode.Unauthorized,
+                (await LoginAsync(NewClient(factory).Http, "alice@example.com", "WrongPassword1")).StatusCode);
+        }
+
+        var lockedAt = DateTime.UtcNow;
+        var browser = NewClient(factory);
+        var locked = await LoginAsync(browser.Http, "alice@example.com");
+
+        // Locked out looks exactly like a wrong password, so it reveals nothing.
+        Assert.Equal(wrongStatus, locked.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, locked.StatusCode);
+        Assert.Equal(wrongBody, await locked.Content.ReadAsStringAsync());
+        Assert.Null(browser.Cookie(AccessTokenCookie));
+
+        var user = await FindUserAsync("alice@example.com");
+        Assert.NotNull(user!.LockoutEnd);
+
+        await Task.Delay(window - (DateTime.UtcNow - lockedAt) + TimeSpan.FromMilliseconds(500));
+
+        (await LoginAsync(browser.Http, "alice@example.com")).EnsureSuccessStatusCode();
+        Assert.NotNull(browser.Cookie(AccessTokenCookie));
+    }
+
+    [Fact]
+    public async Task A_successful_login_resets_the_failure_count()
+    {
+        await RegisteredClientAsync("alice@example.com");
+
+        for (var round = 0; round < 2; round++)
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                await LoginAsync(NewClient().Http, "alice@example.com", "WrongPassword1");
+            }
+
+            (await LoginAsync(NewClient().Http, "alice@example.com")).EnsureSuccessStatusCode();
+        }
+
+        Assert.Null((await FindUserAsync("alice@example.com"))!.LockoutEnd);
     }
 
     [Fact]

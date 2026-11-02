@@ -23,6 +23,24 @@ public class RabbitMqConnection : IAsyncDisposable
             Port = port
         };
 
+        // Optional; each unset or blank one keeps the client default
+        // (guest / guest on "/"), which RabbitMQ only accepts from localhost.
+        // RabbitMQ:Password is a secret: user-secrets or RabbitMQ__Password.
+        if (configuration["RabbitMQ:Username"] is { Length: > 0 } username)
+        {
+            factory.UserName = username;
+        }
+
+        if (configuration["RabbitMQ:Password"] is { Length: > 0 } password)
+        {
+            factory.Password = password;
+        }
+
+        if (configuration["RabbitMQ:VirtualHost"] is { Length: > 0 } virtualHost)
+        {
+            factory.VirtualHost = virtualHost;
+        }
+
         _connection = factory
             .CreateConnectionAsync()
             .GetAwaiter()

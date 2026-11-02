@@ -30,12 +30,12 @@ For an end-to-end run, RabbitMQ plus the API and all three workers must be runni
 
 EF Core migrations live in `src/WaxyCandles.Infrastructure/Migrations` and are committed to source control.
 
-The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX and tracing, about 400 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. A full run takes about 7 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
+The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, rate limiting and startup config, about 440 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. A full run takes about 7 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
 
 ### Frontend (from `web/`)
 
 ```bash
-npm run dev       # vite dev server (expected at localhost:5173 — hardcoded as the API's CORS origin)
+npm run dev       # vite dev server (expected at localhost:5173, the CORS origin set in the API's launchSettings.json)
 npm run build     # tsc -b && vite build
 npm run lint      # eslint .
 npm run preview
@@ -47,10 +47,13 @@ Secrets are NOT stored in appsettings files. In Development they come from `dotn
 
 | Key | Used by |
 |---|---|
-| `Jwt:Secret` | API only |
+| `Jwt:Secret` | API only; at least 32 bytes, or startup fails naming the key (`JwtSigningKey`) |
 | `MarketDataApp:ApiToken` | API (history import) and PricePollingWorker |
 | `AlphaVantage:ApiKey` | API and PricePollingWorker, only when `MarketData:Provider` is `AlphaVantage` |
 | `ConnectionStrings:DefaultConnection` | API and all workers |
+| `RabbitMQ:Password` | API and all workers; optional (with optional non-secret `RabbitMQ:Username`/`VirtualHost`), each applied only when non-empty, else the client default (`guest`) |
+
+Required non-secret setting: `Cors:AllowedOrigins` (array) on the API. Startup fails if it is empty or contains `*`. Set in the API's `launchSettings.json` for `dotnet run`, and by `Cors__AllowedOrigins__0` (compose: `CORS_ALLOWED_ORIGIN`, default `http://localhost:5173`) in Docker. `dotnet run --no-launch-profile` needs it set by hand.
 
 - `appsettings.json` holds structure and non-secret values only (e.g. RabbitMQ host `localhost`). Secret keys are present but blank.
 - Never write a real secret into a tracked file, and never read, print, or log secret values.
@@ -67,14 +70,16 @@ Projects under `src/` follow a clean/onion architecture:
 - **WaxyCandles.Domain** — entities/enums, no dependencies on anything else.
 - **WaxyCandles.Application** — interfaces, DTOs, and business operations, organized by feature (`Alerts/`, `Authentication/`, `MarketData/`, `Watchlists/`, `Notifications/`). Depends only on Domain.
 - **WaxyCandles.Infrastructure** — implements Application's interfaces: EF Core persistence (`Persistence/`), Identity (`Identity/`), RabbitMQ messaging (`Messaging/`), market-data provider integrations (`MarketData/Providers/`). DI wiring lives in `DependencyInjection.cs` (`AddInfrastructure`, `AddApiAuthentication`).
-- **WaxyCandles.Api** — ASP.NET Core Web API; thin controllers (`Controllers/`) that call into Application services. JWT bearer auth, Swagger/OpenAPI, CORS locked to the Vite dev origin.
+- **WaxyCandles.Api** — ASP.NET Core Web API; thin controllers (`Controllers/`) that call into Application services. JWT bearer auth (from an httpOnly cookie), Swagger/OpenAPI in Development only, CORS limited to `Cors:AllowedOrigins`.
+  - Rate limiting (built-in limiter, `Api/RateLimiting`, optional `RateLimiting:{MarketData,HistoryImport,Auth}:{PermitLimit,Window}`): fixed windows, no queue, 429 with `Retry-After`. `market-data` (30/min per user) covers GEX and alert create/update, since level alerts resolve a board; `history-import` 5/min per user; `auth` 10/min per client IP on login/register (refresh/logout unlimited). Behind a reverse proxy the IP limit is shared by every client until forwarded headers are configured.
+  - Login uses `CheckPasswordSignInAsync` with lockout (5 failures, then 5 minutes). A locked account gets the same 401 as a wrong password.
 - **WaxyCandles.PricePollingWorker / AlertWorker / OutboxWorker** — standalone background-service executables, each with their own `appsettings*.json`.
 
 Market data access is abstracted behind `IMarketDataProvider` (Application layer) so vendors can be swapped without touching controllers or business logic. The non-secret `MarketData:Provider` setting picks one: `MarketDataApp` (marketdata.app, set in the API and PricePollingWorker appsettings and the default in Docker) or `AlphaVantage` (the fallback when unset). Both providers store daily candles at UTC midnight of the trading date, so candle dedup holds across a switch.
 
 ### Options and GEX
 
-`GET /api/stocks/{symbol}/gex` (web page `/gex`) is synchronous request/response, outside the messaging pipeline. `GexService` (Infrastructure/Options) takes a quote to centre the strike window, fetches that slice of the chain through `IOptionsDataProvider` (Market Data only; separate from `IMarketDataProvider`), and `GexCalculator` (Application/Options/Gex) builds the strike × expiration table, with calls positive and puts negative under the naive dealer model. Provider gamma is used when present, else Black-Scholes from the provider's IV or IV solved from the mid. Vanna is always Black-Scholes. Boards are cached in memory per symbol/days/range for `Gex:CacheDuration` (default 1 minute, misses included). Market Data bills live/delayed chains per contract, so keep requests windowed; `MarketDataApp:OptionsMode` = `cached` (paid plans only) makes it 1 credit per request. Trial accounts get the previous session's chain.
+`GET /api/stocks/{symbol}/gex` (web page `/gex`) is synchronous request/response, outside the messaging pipeline. `GexService` (Infrastructure/Options) takes a quote to centre the strike window, fetches that slice of the chain through `IOptionsDataProvider` (Market Data only; separate from `IMarketDataProvider`), and `GexCalculator` (Application/Options/Gex) builds the strike × expiration table, with calls positive and puts negative under the naive dealer model. Provider gamma is used when present, else Black-Scholes from the provider's IV or IV solved from the mid. Vanna is always Black-Scholes. The chain is fetched and cached for the request's window rounded up to a fixed ladder (`GexFetchWindow`: days 0/7/14/30/60/90/180/365, strike range 1/2/5/10/15/20/30/40/50%), so near-identical requests share one billed fetch; the table is still built from the exact requested window. Cached in memory per symbol and ladder window for `Gex:CacheDuration` (default 1 minute, misses included). The web presets and level-alert defaults are ladder steps. Market Data bills live/delayed chains per contract, so keep requests windowed; `MarketDataApp:OptionsMode` = `cached` (paid plans only) makes it 1 credit per request. Trial accounts get the previous session's chain.
 
 ### Distributed tracing
 
@@ -98,7 +103,8 @@ Price Polling Worker -> writes StockPrice + OutboxMessage (same DB transaction)
 ```
 
 - The PricePollingWorker polls every `PricePolling:Interval` (default 1 minute), only during US regular trading hours (`MarketHours`, 09:30–16:00 ET) on days the `IMarketCalendar` says trade, unless `PricePolling:MarketHoursOnly` is false. The calendar follows `MarketData:Provider`: Market Data's `markets/status` (holidays; 30 days per request, cached a day; half days count as open) or weekdays only for Alpha Vantage. Any calendar failure or unknown date falls back to "weekdays trade", since a wrongly skipped trading day would silence alerts. Each poll fetches all watched symbols in one batched provider call. A price is stamped with the provider's quote time (`MarketQuote.QuotedAt`, falling back to the poll time when the provider has none), and a quote no newer than the latest stored price for its symbol is not written or published again. The outbox row's `CreatedAt` stays the write time, since the outbox publishes in that order.
-- Each queue's topology (queue, `<name>-retry`, `-dlx`/`-dead-letter`) and its retry policy (`MaxRetries`, `RetryDelay`) are defined once in `QueueTopology` (Infrastructure/Messaging); producers and consumers both declare it with identical arguments. `stock-price-updated` retries 2x at 5s; `alert-triggered` 5x at 30s. `RetryDelay` is the retry queue's `x-message-ttl`, so changing it for a queue that already exists on a broker causes 406 PRECONDITION_FAILED until that queue is deleted. Add a new message type by adding a topology and a `MessageRoutes` entry. The outbox leaves rows of unrouted types pending.
+- Each queue's topology (queue, `<name>-retry`, `-dlx`/`-dead-letter`) and its retry policy (`MaxRetries`, `RetryDelay`) are defined once in `QueueTopology` (Infrastructure/Messaging); producers and consumers both declare it with identical arguments. `stock-price-updated` retries 2x at 5s; `alert-triggered` 5x at 30s. `RetryDelay` is the retry queue's `x-message-ttl`, so changing it for a queue that already exists on a broker causes 406 PRECONDITION_FAILED until that queue is deleted. Add a new message type by adding a topology and a `MessageRoutes` entry. The outbox leaves rows of unrouted types pending. `OutboxMessage.Type` and the routes use each contract's `MessageType` constant (not `nameof`); never change an existing value, or pending rows stop routing (`MessageRoutesTests` pins them).
+- The OutboxWorker, like the consumers, resolves `RabbitMqConnection` lazily inside its loop, so it starts while the broker is down and retries every poll (5s). The connection's constructor is synchronous and ignores cancellation, so an unresponsive broker host can hold up shutdown for the client's ~30s connect timeout.
 - Consumers derive from `RabbitMqConsumer<TMessage>`, which owns transport concerns: reconnect loop, publisher-confirmed mandatory retry/dead-letter publishes, requeue safety net, unreadable payloads straight to the dead-letter queue. Subclasses implement `IsValid` and `ProcessAsync` and are responsible for idempotency.
 - Idempotency: `StockPriceConsumer` claims a `ProcessedMessage` row inside the transaction that evaluates alerts, and `AlertEvaluationService` fires and re-arms alerts only through conditional updates that re-check, at write time, that the alert is unchanged since it was read (target/direction/frequency), still in the expected state, and that the price's observation time (`StockPriceUpdatedMessage.Timestamp`) is newer than the alert's `StateChangedAt` — so concurrent or out-of-order evaluations emit one event per fire, and an edit (which re-arms and stamps `StateChangedAt`) can't be overridden by a stale price; `AlertTriggeredConsumer` relies on the unique `Notification.SourceMessageId`, and its SignalR push has a 5s timeout because it runs before the ack. Check this when touching any consumer logic.
 - The SignalR push (`/hubs/notifications`, cookie-authenticated) only reaches clients on the API instance that consumed the message; more than one API instance would need a SignalR backplane.

@@ -126,6 +126,30 @@ public class AlertEvaluationServiceTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Alert_outbox_row_is_stamped_with_write_time_not_observation_time()
+    {
+        // The outbox publishes in CreatedAt order and every other row uses its
+        // write time, so a delayed price must not backdate the alert's row. The
+        // observation time still travels in the payload (Notification.CreatedAt).
+        var observedAt = DateTimeOffset.UtcNow.AddHours(-3);
+        await SeedAlertAsync("AAPL", AlertDirection.Above, 100m);
+
+        var before = DateTimeOffset.UtcNow;
+        await using (var evaluationDb = NewDbContext())
+        {
+            await new AlertEvaluationService(evaluationDb).EvaluateAsync("AAPL", 150m, observedAt);
+        }
+        var after = DateTimeOffset.UtcNow;
+
+        await using var db = NewDbContext();
+        var entry = await db.OutboxMessages.SingleAsync();
+        var message = JsonSerializer.Deserialize<AlertTriggeredMessage>(entry.Payload)!;
+
+        Assert.InRange(entry.CreatedAt, before, after);
+        Assert.Equal(observedAt, message.TriggeredAt);
+    }
+
+    [Fact]
     public async Task One_event_per_triggered_alert_and_none_for_the_rest()
     {
         var hitA = await SeedAlertAsync("AAPL", AlertDirection.Above, 100m);
