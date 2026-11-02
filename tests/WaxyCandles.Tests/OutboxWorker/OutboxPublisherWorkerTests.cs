@@ -1,5 +1,10 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using WaxyCandles.Application.Alerts.Messages;
 using WaxyCandles.Application.MarketData.Messages;
 using WaxyCandles.Domain.Entities;
@@ -226,6 +231,82 @@ public class OutboxPublisherWorkerTests(IntegrationFixture fixture)
         await using var db = NewDbContext();
         Assert.Null((await db.OutboxMessages.SingleAsync(m => m.Id == unknown.Id)).ProcessedAt);
     }
+
+    [Fact]
+    public async Task Worker_starts_and_keeps_running_while_the_broker_is_unreachable()
+    {
+        var settings = BrokerSettings(ClosedPort());
+
+        var started = Stopwatch.StartNew();
+        var worker = await StartWorkerAsync(settings);
+        started.Stop();
+
+        Assert.True(
+            started.Elapsed < TimeSpan.FromSeconds(5),
+            $"StartAsync took {started.Elapsed}; it must not wait on the broker.");
+
+        await Eventually.TrueAsync(
+            () => _logs.Contains("Error while publishing outbox messages."),
+            PublishTimeout,
+            "the failed broker connection to be logged");
+
+        Assert.NotNull(worker.ExecuteTask);
+        Assert.False(worker.ExecuteTask!.IsCompleted, "The worker stopped after a failed connection.");
+    }
+
+    [Fact]
+    public async Task Pending_row_is_published_once_the_broker_becomes_reachable()
+    {
+        // The connection is retried on each poll (DI doesn't cache a singleton
+        // whose constructor threw), and reads the port each time it is created.
+        var settings = BrokerSettings(ClosedPort());
+        var entry = await SeedOutboxAsync(T0, "AAPL");
+
+        await StartWorkerAsync(settings);
+
+        await Eventually.TrueAsync(
+            () => _logs.Contains("Error while publishing outbox messages."),
+            PublishTimeout,
+            "the failed broker connection to be logged");
+
+        await using (var db = NewDbContext())
+        {
+            Assert.Null((await db.OutboxMessages.SingleAsync()).ProcessedAt);
+        }
+
+        settings["RabbitMQ:Port"] = Fixture.RabbitMqPort.ToString();
+
+        await WaitUntilAllProcessedAsync();
+        Assert.Equal([entry.Payload], await DrainPayloadsAsync());
+    }
+
+    private IConfigurationRoot BrokerSettings(int port)
+    {
+        var settings = Fixture.TestSettings(ConnectionString);
+        settings["RabbitMQ:Port"] = port.ToString();
+
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(settings)
+            .Build();
+    }
+
+    // A local port nothing listens on, so connecting is refused straight away.
+    private static int ClosedPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+
+        return port;
+    }
+
+    private Task<OutboxPublisherWorker> StartWorkerAsync(IConfiguration configuration) =>
+        _workers.StartAsync<OutboxPublisherWorker>(
+            Fixture.BuildServices(
+                ConnectionString,
+                services => services.AddSingleton(configuration),
+                loggerProvider: _logs));
 
     private async Task StartWorkerAsync() =>
         await _workers.StartAsync<OutboxPublisherWorker>(

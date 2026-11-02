@@ -14,7 +14,7 @@ public static class MessageRoutes
     public static readonly IReadOnlyDictionary<string, QueueTopology> ByMessageType =
         new Dictionary<string, QueueTopology>(StringComparer.OrdinalIgnoreCase)
         {
-            [nameof(StockPriceUpdatedMessage)] = QueueTopology.StockPriceUpdated,
-            [nameof(AlertTriggeredMessage)] = QueueTopology.AlertTriggered
+            [StockPriceUpdatedMessage.MessageType] = QueueTopology.StockPriceUpdated,
+            [AlertTriggeredMessage.MessageType] = QueueTopology.AlertTriggered
         };
 }

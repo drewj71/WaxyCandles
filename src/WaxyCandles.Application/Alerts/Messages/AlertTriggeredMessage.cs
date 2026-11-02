@@ -7,6 +7,13 @@ namespace WaxyCandles.Application.Alerts.Messages;
 /// </summary>
 public class AlertTriggeredMessage
 {
+    /// <summary>
+    /// The <c>OutboxMessage.Type</c> (and AMQP type) this message is routed by.
+    /// Fixed string, not nameof: renaming the class must not strand pending rows.
+    /// Never change the value.
+    /// </summary>
+    public const string MessageType = "AlertTriggeredMessage";
+
     public Guid MessageId { get; set; }
 
     public Guid AlertId { get; set; }
