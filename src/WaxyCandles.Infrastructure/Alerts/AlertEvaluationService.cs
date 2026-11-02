@@ -190,9 +190,12 @@ public class AlertEvaluationService : IAlertEvaluationService
         var outboxMessage = new OutboxMessage
         {
             Id = message.MessageId,
-            Type = nameof(AlertTriggeredMessage),
+            Type = AlertTriggeredMessage.MessageType,
             Payload = JsonSerializer.Serialize(message),
-            CreatedAt = message.TriggeredAt
+            // Write time, like every outbox row: the outbox publishes in
+            // CreatedAt order. TriggeredAt (the price's observation time) stays
+            // in the payload.
+            CreatedAt = DateTimeOffset.UtcNow
         };
 
         // Evaluated inside the price message's "process" span, so the

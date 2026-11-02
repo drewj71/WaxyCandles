@@ -113,7 +113,7 @@ public class MarketDataService : IMarketDataService
             var outboxMessage = new OutboxMessage
             {
                 Id = message.MessageId,
-                Type = nameof(StockPriceUpdatedMessage),
+                Type = StockPriceUpdatedMessage.MessageType,
                 Payload = JsonSerializer.Serialize(message),
                 CreatedAt = polledAt
             };
