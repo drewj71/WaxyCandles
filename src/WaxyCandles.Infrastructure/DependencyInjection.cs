@@ -7,7 +7,6 @@ using WaxyCandles.Infrastructure.Identity;
 using WaxyCandles.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
 using WaxyCandles.Infrastructure.Authentication;
 using WaxyCandles.Application.Alerts.Interfaces;
 using WaxyCandles.Infrastructure.Alerts;
@@ -116,11 +115,23 @@ public static class DependencyInjection
                 options.Password.RequireLowercase = true;
                 options.Password.RequireNonAlphanumeric = false;
                 options.Password.RequiredLength = 8;
+
+                // Brute-force protection for login (AuthService counts
+                // failures). Short on purpose: anyone who knows an email can
+                // trigger a lockout, so a long one would let them keep a user
+                // out. The per-IP rate limit on the auth endpoints does the rest.
+                options.Lockout.AllowedForNewUsers = true;
+                options.Lockout.MaxFailedAccessAttempts = 5;
+                options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
             })
             .AddEntityFrameworkStores<AppDbContext>()
             .AddDefaultTokenProviders();
 
         var jwt = configuration.GetSection("Jwt");
+
+        // Read now, so a missing or weak secret stops startup with a clear
+        // message instead of failing on the first request.
+        var signingKey = JwtSigningKey.From(configuration);
 
         services
             .AddAuthentication(options =>
@@ -144,9 +155,7 @@ public static class DependencyInjection
                         ValidIssuer = jwt["Issuer"],
                         ValidAudience = jwt["Audience"],
             
-                        IssuerSigningKey =
-                            new SymmetricSecurityKey(
-                                Encoding.UTF8.GetBytes(jwt["Secret"]!))
+                        IssuerSigningKey = signingKey
                     };
             
                 options.Events = new JwtBearerEvents

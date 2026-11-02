@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using WaxyCandles.Api.RateLimiting;
 using WaxyCandles.Application.MarketData.Interfaces;
 using WaxyCandles.Application.MarketData.Models;
 using WaxyCandles.Application.Options.Gex;
@@ -24,7 +26,9 @@ public class StocksController : ControllerBase
         _gexService = gexService;
     }
 
+    // Each import is a billed provider call. The web app never calls this.
     [HttpPost("{symbol}/historical")]
+    [EnableRateLimiting(RateLimitPolicies.HistoryImport)]
     public async Task<IActionResult> ImportHistoricalData(
         string symbol,
         [FromQuery] CandleInterval interval,
@@ -80,6 +84,7 @@ public class StocksController : ControllerBase
     /// to <paramref name="days"/> calendar days out.
     /// </summary>
     [HttpGet("{symbol}/gex")]
+    [EnableRateLimiting(RateLimitPolicies.MarketData)]
     public async Task<IActionResult> GetGexTable(
         string symbol,
         CancellationToken cancellationToken,

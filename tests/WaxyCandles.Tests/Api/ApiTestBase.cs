@@ -25,6 +25,30 @@ public sealed class WaxyCandlesApiFactory(
     FakeMarketDataProvider marketData)
     : WebApplicationFactory<AlertsController>
 {
+    public const string FrontendOrigin = "http://localhost:5173";
+
+    /// <summary>
+    /// The fixture's settings plus what the API itself requires: the web app's
+    /// CORS origin, and rate limits high enough that only tests that lower
+    /// them (RateLimitingApiTests) ever hit one. Every request in TestServer
+    /// has no remote IP, so all clients share one per-IP bucket.
+    /// </summary>
+    public static Dictionary<string, string?> ApiSettings(
+        IReadOnlyDictionary<string, string?> fixtureSettings)
+    {
+        var settings = new Dictionary<string, string?>(fixtureSettings)
+        {
+            ["Cors:AllowedOrigins:0"] = FrontendOrigin
+        };
+
+        foreach (var policy in new[] { "MarketData", "HistoryImport", "Auth" })
+        {
+            settings[$"RateLimiting:{policy}:PermitLimit"] = "10000";
+        }
+
+        return settings;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Not "Development", so the developer's real user secrets are never loaded.
@@ -77,7 +101,7 @@ public abstract class ApiTestBase(IntegrationFixture fixture)
     public override async Task InitializeAsync()
     {
         await base.InitializeAsync();
-        Factory = new WaxyCandlesApiFactory(Fixture.TestSettings(ConnectionString), MarketData);
+        Factory = new WaxyCandlesApiFactory(Settings(), MarketData);
     }
 
     public override async Task DisposeAsync()
@@ -86,10 +110,17 @@ public abstract class ApiTestBase(IntegrationFixture fixture)
         await base.DisposeAsync();
     }
 
-    protected ApiClient NewClient()
+    /// <summary>The settings <see cref="Factory"/> uses; change a copy for a factory of your own.</summary>
+    protected Dictionary<string, string?> Settings() =>
+        WaxyCandlesApiFactory.ApiSettings(Fixture.TestSettings(ConnectionString));
+
+    protected ApiClient NewClient() => NewClient(Factory);
+
+    /// <summary>A browser-like client for another factory, e.g. one with different settings.</summary>
+    protected static ApiClient NewClient(WebApplicationFactory<AlertsController> factory)
     {
         var cookies = new CookieContainer();
-        var http = Factory.CreateDefaultClient(BaseAddress, new CookieContainerHandler(cookies));
+        var http = factory.CreateDefaultClient(BaseAddress, new CookieContainerHandler(cookies));
 
         return new ApiClient(http, cookies);
     }

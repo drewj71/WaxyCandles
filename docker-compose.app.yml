@@ -13,6 +13,9 @@
 #   MARKET_DATA_PROVIDER  optional, "MarketDataApp" (default) or "AlphaVantage".
 #   ALPHAVANTAGE_API_KEY  only needed when MARKET_DATA_PROVIDER=AlphaVantage.
 #   JWT_ISSUER, JWT_AUDIENCE  optional, default "WaxyCandles".
+#   CORS_ALLOWED_ORIGIN   optional, the web app's origin the API accepts
+#                         credentialed requests from; default the Vite dev
+#                         server, http://localhost:5173.
 # Compose stops with "Set <NAME> in .env" if a required one is missing.
 #
 # The API is then at http://localhost:5148 (same as `dotnet run`), so the
@@ -95,6 +98,7 @@ services:
     container_name: waxycandles-api
     environment:
       <<: [*database, *messaging, *jwt, *market-data]
+      Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN:-http://localhost:5173}
     ports:
       - "5148:8080"
 
