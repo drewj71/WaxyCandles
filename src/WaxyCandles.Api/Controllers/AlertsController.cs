@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using WaxyCandles.Api.RateLimiting;
 using WaxyCandles.Application.Alerts.DTOs;
 using WaxyCandles.Application.Alerts.Interfaces;
 
@@ -33,7 +35,9 @@ public class AlertsController : ControllerBase
         return Ok(alerts);
     }
 
+    // Create and update can resolve a GEX level, a billed chain fetch.
     [HttpPost]
+    [EnableRateLimiting(RateLimitPolicies.MarketData)]
     public async Task<ActionResult<AlertResponse>> Create(
         CreateAlertRequest request)
     {
@@ -73,6 +77,7 @@ public class AlertsController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [EnableRateLimiting(RateLimitPolicies.MarketData)]
     public async Task<ActionResult<AlertResponse>> Update(
         Guid id,
         UpdateAlertRequest request)

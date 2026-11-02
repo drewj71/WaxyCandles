@@ -7,6 +7,7 @@ using WaxyCandles.Application.Notifications.Interfaces;
 using WaxyCandles.Infrastructure.Notifications;
 using WaxyCandles.Infrastructure.Telemetry;
 using OpenTelemetry.Trace;
+using WaxyCandles.Api.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,17 +36,31 @@ builder.Services.AddSignalR()
 builder.Services.AddSingleton<IRealtimeNotifier, SignalRNotifier>();
 builder.Services.AddHostedService<AlertTriggeredConsumer>();
 
+// The web app's origin(s). Required: with cookie auth the browser only sends
+// credentials cross-origin to an exact allowed origin. Development gets the
+// Vite dev server from launchSettings.json; containers get Cors__AllowedOrigins__0.
+const string allowedOriginsKey = "Cors:AllowedOrigins";
+
+var allowedOrigins = (builder.Configuration
+        .GetSection(allowedOriginsKey)
+        .Get<string[]>() ?? [])
+    .Where(x => !string.IsNullOrWhiteSpace(x))
+    .Select(x => x.Trim())
+    .ToArray();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
     {
         policy
-            .WithOrigins("http://localhost:5173")
+            .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
     });
 });
+
+builder.Services.AddApiRateLimiting(builder.Configuration);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -84,14 +99,40 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 var app = builder.Build();
+
+// Checked after Build(): EF's design-time tooling (the Dockerfile's migrations
+// bundle) starts this host only up to Build() and has no CORS settings.
+if (allowedOrigins.Length == 0)
+{
+    throw new InvalidOperationException(
+        $"{allowedOriginsKey} is not set. Set it to the web app's origin, e.g. " +
+        "Cors__AllowedOrigins__0=http://localhost:5173.");
+}
+
+if (allowedOrigins.Contains("*"))
+{
+    throw new InvalidOperationException(
+        $"{allowedOriginsKey} can't be \"*\": credentialed CORS needs exact origins.");
+}
+
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-app.UseSwagger();
-app.UseSwaggerUI();
+// The API description is for local development only.
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
-app.UseAuthentication();
+// Recommended order: CORS after routing and before auth (preflights are
+// answered without credentials), and the rate limiter after auth so its
+// per-user partitions can see the signed-in user, and after routing so
+// [EnableRateLimiting] on endpoints applies.
+app.UseRouting();
 app.UseCors("Frontend");
+app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapControllers();
 app.MapHub<NotificationsHub>(NotificationsHub.Path);

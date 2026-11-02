@@ -1,7 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using WaxyCandles.Infrastructure.Identity;
@@ -36,8 +35,7 @@ public class TokenService : ITokenService
                 Guid.NewGuid().ToString())
         };
 
-        var key = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(jwt["Secret"]!));
+        var key = JwtSigningKey.From(_configuration);
 
         var credentials = new SigningCredentials(
             key,

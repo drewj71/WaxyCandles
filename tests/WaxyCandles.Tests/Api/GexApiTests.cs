@@ -101,6 +101,22 @@ public class GexApiTests(IntegrationFixture fixture) : ApiTestBase(fixture)
     }
 
     [Fact]
+    public async Task Near_identical_ranges_cannot_each_cost_a_chain_request()
+    {
+        MarketData.SetQuote("AAPL", 100m);
+        _options.Chain = new OptionChain("AAPL", 100m, DateTimeOffset.UtcNow, []);
+
+        for (var i = 1; i <= 10; i++)
+        {
+            var response = await _http.GetAsync($"/api/stocks/AAPL/gex?days=30&strikeRange=10.000{i}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        Assert.Single(_options.Queries);
+        Assert.Single(MarketData.QuoteRequests);
+    }
+
+    [Fact]
     public async Task Requires_sign_in()
     {
         var response = await NewRawClient().GetAsync("/api/stocks/AAPL/gex");

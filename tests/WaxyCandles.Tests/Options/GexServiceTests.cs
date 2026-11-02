@@ -79,13 +79,91 @@ public class GexServiceTests
         var first = await service.GetGexTableAsync("AAPL", new GexRequest());
         var second = await service.GetGexTableAsync("aapl", new GexRequest());
 
-        Assert.Same(first, second);
+        // Built again from the cached chain, so equal rather than the same instance.
+        Assert.NotNull(first);
+        Assert.Equal(first.Rows.Select(r => r.Strike), second!.Rows.Select(r => r.Strike));
         Assert.Single(_options.Queries);
         Assert.Single(_marketData.QuoteRequests);
 
         // Different ranges are a different table.
         await service.GetGexTableAsync("AAPL", new GexRequest(Days: 7));
         Assert.Equal(2, _options.Queries.Count);
+    }
+
+    [Fact]
+    public async Task Near_identical_ranges_share_one_provider_call()
+    {
+        _marketData.SetQuote("AAPL", 100m);
+        _options.Chain = new OptionChain("AAPL", 100m, Now, [Contract(100m, "2026-10-16")]);
+        var service = Service();
+
+        for (var i = 1; i <= 20; i++)
+        {
+            await service.GetGexTableAsync("AAPL", new GexRequest(Days: 30, StrikeRangePercent: 10m + i * 0.0001m));
+        }
+
+        await service.GetGexTableAsync("AAPL", new GexRequest(Days: 21, StrikeRangePercent: 14.5m));
+
+        // All of them fit the 30 day / 15% ladder window.
+        var query = Assert.Single(_options.Queries);
+        Assert.Equal(new DateOnly(2026, 11, 14), query.ExpirationTo);
+        Assert.Equal(85m, query.StrikeMin);
+        Assert.Equal(115m, query.StrikeMax);
+        Assert.Single(_marketData.QuoteRequests);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(7, 7)]
+    [InlineData(8, 14)]
+    [InlineData(30, 30)]
+    [InlineData(31, 60)]
+    [InlineData(90, 90)]
+    [InlineData(180, 180)]
+    [InlineData(181, 365)]
+    [InlineData(365, 365)]
+    public void Days_round_up_to_the_ladder(int days, int fetched)
+    {
+        Assert.Equal(fetched, GexFetchWindow.For(new GexRequest(days, 10m)).Days);
+    }
+
+    [Theory]
+    [InlineData(0.01, 1)]
+    [InlineData(5, 5)]
+    [InlineData(10, 10)]
+    [InlineData(10.0001, 15)]
+    [InlineData(20, 20)]
+    [InlineData(30, 30)]
+    [InlineData(49.9, 50)]
+    [InlineData(50, 50)]
+    public void Strike_ranges_round_up_to_the_ladder(double range, double fetched)
+    {
+        Assert.Equal((decimal)fetched, GexFetchWindow.For(new GexRequest(30, (decimal)range)).StrikeRangePercent);
+    }
+
+    [Fact]
+    public async Task Off_ladder_request_is_built_from_its_own_window_not_the_fetched_one()
+    {
+        _marketData.SetQuote("AAPL", 100m);
+        _options.Chain = new OptionChain("AAPL", 100m, Now,
+        [
+            Contract(100m, "2026-10-16"),
+            // Inside the fetched 15% but outside the requested 12% (88-112).
+            Contract(114m, "2026-10-16"),
+            // Inside the fetched 14 days but past the requested 8 (Oct 23).
+            Contract(100m, "2026-10-27")
+        ]);
+
+        var table = await Service().GetGexTableAsync("AAPL", new GexRequest(Days: 8, StrikeRangePercent: 12m));
+
+        var query = Assert.Single(_options.Queries);
+        Assert.Equal(new DateOnly(2026, 10, 29), query.ExpirationTo);
+        Assert.Equal(85m, query.StrikeMin);
+        Assert.Equal(115m, query.StrikeMax);
+
+        Assert.NotNull(table);
+        Assert.Equal([100m], table.Rows.Select(r => r.Strike));
+        Assert.Equal([new DateOnly(2026, 10, 16)], table.Expirations);
     }
 
     [Theory]
