@@ -30,7 +30,7 @@ For an end-to-end run, RabbitMQ plus the API and all three workers must be runni
 
 EF Core migrations live in `src/WaxyCandles.Infrastructure/Migrations` and are committed to source control.
 
-The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, metrics, retention, rate limiting and startup config, about 490 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. Metric tests use `MetricRecorder` (a `MeterListener`) in the non-parallel `Metrics` collection. A full run takes about 9 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
+The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, metrics, retention, health checks, SQL retry and fault injection (`Resilience/`, an EF interceptor that throws a real transient `SqlException`, including after a real commit), rate limiting and startup config, about 560 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. Metric tests use `MetricRecorder` (a `MeterListener`) in the non-parallel `Metrics` collection. A full run takes about 12 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
 
 ### Frontend (from `web/`)
 
@@ -55,7 +55,14 @@ Secrets are NOT stored in appsettings files. In Development they come from `dotn
 
 Required non-secret setting: `Cors:AllowedOrigins` (array) on the API. Startup fails if it is empty or contains `*`. Set in the API's `launchSettings.json` for `dotnet run`, and by `Cors__AllowedOrigins__0` (compose: `CORS_ALLOWED_ORIGIN`, default `http://localhost:5173`) in Docker. `dotnet run --no-launch-profile` needs it set by hand.
 
-Optional non-secret settings with defaults in code: `RabbitMQ:PrefetchCount` (consumers, default 10; an invalid value logs a warning and uses 10) and the OutboxWorker's `Retention:{Interval,InitialDelay,OutboxMessageRetention,ProcessedMessageRetention,StockPriceRetention,BatchSize}` (see Async pipeline; validated at startup, including upper bounds).
+Optional non-secret settings with defaults in code:
+- `RabbitMQ:PrefetchCount`: consumers, default 10. An invalid value logs a warning and uses 10.
+- The OutboxWorker's `Retention:{Interval,InitialDelay,OutboxMessageRetention,ProcessedMessageRetention,StockPriceRetention,BatchSize}`: see Async pipeline.
+- `Database:MaxRetryCount` (3, 0–10) and `Database:MaxRetryDelay` (5 s, at most 30 s): see Resilience.
+- `MarketDataApp:Timeout` (20 s), `MarketDataApp:OptionsTimeout` (30 s) and `AlphaVantage:Timeout` (20 s), each at most 2 minutes.
+- Workers: `Health:{HeartbeatFile,Period,OutboxLoopMaxAge,PricePolling:MaxPollAge}`: see Health checks.
+
+All except `PrefetchCount` are validated at startup (including upper bounds), and a bad value fails startup naming the key.
 
 - `appsettings.json` holds structure and non-secret values only (e.g. RabbitMQ host `localhost`). Secret keys are present but blank.
 - Never write a real secret into a tracked file, and never read, print, or log secret values.
@@ -75,6 +82,7 @@ Projects under `src/` follow a clean/onion architecture:
 - **WaxyCandles.Api** — ASP.NET Core Web API; thin controllers (`Controllers/`) that call into Application services. JWT bearer auth (from an httpOnly cookie), Swagger/OpenAPI in Development only, CORS limited to `Cors:AllowedOrigins`.
   - Rate limiting (built-in limiter, `Api/RateLimiting`, optional `RateLimiting:{MarketData,HistoryImport,Auth}:{PermitLimit,Window}`): fixed windows, no queue, 429 with `Retry-After`. `market-data` (30/min per user) covers GEX and alert create/update, since level alerts resolve a board; `history-import` 5/min per user; `auth` 10/min per client IP on login/register (refresh/logout unlimited). Behind a reverse proxy the IP limit is shared by every client until forwarded headers are configured.
   - Login uses `CheckPasswordSignInAsync` with lockout (5 failures, then 5 minutes). A locked account gets the same 401 as a wrong password.
+  - Refresh tokens are stored only as `RefreshToken.TokenHash`, the SHA-256 of the token's UTF-8 bytes (`TokenService.HashRefreshToken`, `binary(32)`, unique). Look tokens up by hash, and never store or log the plaintext. Refresh rotates the token; replaying a revoked one is a 401.
 - **WaxyCandles.PricePollingWorker / AlertWorker / OutboxWorker** — standalone background-service executables, each with their own `appsettings*.json`.
 
 Market data access is abstracted behind `IMarketDataProvider` (Application layer) so vendors can be swapped without touching controllers or business logic. The non-secret `MarketData:Provider` setting picks one: `MarketDataApp` (marketdata.app, set in the API and PricePollingWorker appsettings and the default in Docker) or `AlphaVantage` (the fallback when unset). Both providers store daily candles at UTC midnight of the trading date, so candle dedup holds across a switch.
@@ -99,6 +107,31 @@ All names are prefixed `waxycandles.`. Rules:
 - Tags are low-cardinality only (queue, outcome, endpoint, kind), never a symbol, user or message id.
 - Gauges report values cached by the loop that owns them, and their callbacks never do I/O. The outbox backlog is read each poll. Queue depth is read every 15s by passive declares on a separate channel, with a 5s limit, and skipped while the publish channel is down.
 - Metric recording must never change message handling (the consumer's recording swallows its own errors).
+
+### Health checks
+
+- **API:**
+  - `/health/live` runs no checks. `/health/ready` checks the database and RabbitMQ, each cut off after 5 s. Both are anonymous and not rate-limited, and return 503 when unhealthy.
+  - The JSON shows only an exception's type, never its message.
+  - The broker check opens its own short-lived connection instead of using `RabbitMqConnection`, which would block for about 30 s.
+- **Workers** have no HTTP server. Each runs its checks every `Health:Period` (15 s) and rewrites `/tmp/waxycandles-<service>.healthy` while they pass, deleting it when one fails. The compose health check treats a missing file, or one older than 60 s, as unhealthy.
+- **What makes a worker unhealthy:**
+  - Any worker: a background loop has stopped while the host isn't shutting down.
+  - PricePollingWorker: no successful poll for `MaxPollAge` (3 × interval, at least 5 min), but only while the market is open, counted from the open at the earliest.
+  - OutboxWorker: its loop hasn't completed an iteration for 2 minutes. That includes a long database outage.
+- A broker outage does not make any worker unhealthy, since they reconnect on their own.
+
+### Resilience
+
+- **SQL retries.** EF uses `EnableRetryOnFailure` (`Database:MaxRetryCount` 3, `MaxRetryDelay` 5 s), so every query and `SaveChanges` is retried on transient errors.
+- **Explicit transactions.** EF refuses an explicit transaction outside an execution strategy, so any new one must run inside `Database.CreateExecutionStrategy().ExecuteAsync(...)`. The delegate must be safe to replay from the start: re-query inside it and clear or detach what a failed attempt tracked. Do this for any new explicit transaction. Inside an outer strategy a nested `ExecuteAsync` doesn't retry on its own.
+  - `StockPriceConsumer` runs the claim, the evaluation and the commit as one unit and clears the change tracker on each attempt.
+  - `AlertEvaluationService` joins the caller's transaction, or wraps its own.
+- **Ambiguous commits.** EF doesn't check whether a commit that reported an error actually succeeded. Unique keys, IDs set in code and the conditional updates are what prevent duplicates. `VerifiedSaveExtensions` checks whether the rows exist instead of inserting again; it's used by the poller, notification insert and alert create, so the result is success rather than an error.
+- **Queue retries.** Short SQL blips are absorbed before a queue retry is used. Longer outages retry and dead-letter as before, with `x-exception-type` `SqlException`.
+- **Vendor HttpClients.** They are named clients with timeouts only: Market Data 20 s (including the market calendar), options 30 s, Alpha Vantage 20 s.
+  - Never add retries or a resilience handler: a retried request is billed again, and a 429 usually means the daily credits are spent.
+  - A timeout is `outcome=timeout` on `marketdata.requests`. In the API it is still a 500.
 
 ### GEX level alerts
 
@@ -157,6 +190,7 @@ The app is mid-refactor from plain React Router to TanStack Router + TanStack Qu
 
 - After backend changes run `dotnet build`; after frontend changes run `npm run build` (it type-checks) and `npm run lint`.
 - Changes to consumers, the outbox, or queue topology: explain the plan first and call out the effect on retry/dead-letter behavior and idempotency before editing.
+- Any explicit transaction goes inside the execution strategy and must be safe to replay (see Resilience).
 - Never edit or delete applied EF migrations; add a new one.
 - Don't hand-edit `web/src/routeTree.gen.ts`.
 - Keep controllers thin; business logic goes in the Application layer.
