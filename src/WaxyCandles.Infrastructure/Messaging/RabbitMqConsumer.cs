@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -33,6 +35,16 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
     // How long to wait before reopening a lost channel, and before requeueing a
     // delivery whose retry/dead-letter publish failed (avoids a hot redelivery loop).
     private static readonly TimeSpan RecoveryDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Unacked deliveries the broker may push to one consumer
+    /// (<c>RabbitMQ:PrefetchCount</c> overrides it). Without a limit the broker
+    /// pushes a whole backlog into one consumer's memory, and a second instance
+    /// gets none of it. Deliveries are still handled one at a time.
+    /// </summary>
+    public const ushort DefaultPrefetchCount = 10;
+
+    public const string PrefetchCountKey = "RabbitMQ:PrefetchCount";
 
     private readonly QueueTopology _topology;
     private readonly IServiceProvider _services;
@@ -134,6 +146,15 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
             await connection.CreateConfirmedChannelAsync(
                 stoppingToken);
 
+        // Per consumer (global: false), before subscribing. Automatic recovery
+        // re-applies it to the recovered channel before re-registering the
+        // consumer; a channel rebuilt by the loop above gets it again here.
+        await channel.BasicQosAsync(
+            prefetchSize: 0,
+            prefetchCount: PrefetchCount(),
+            global: false,
+            stoppingToken);
+
         var lost = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -222,9 +243,11 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         BasicDeliverEventArgs eventArgs,
         CancellationToken stoppingToken)
     {
+        var started = Stopwatch.GetTimestamp();
+
         try
         {
-            await HandleDeliveryAsync(channel, eventArgs, stoppingToken);
+            await HandleDeliveryAsync(channel, eventArgs, started, stoppingToken);
         }
         catch (Exception ex)
         {
@@ -257,6 +280,8 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                     multiple: false,
                     requeue: true,
                     stoppingToken);
+
+                RecordConsumed(WaxyCandlesMetrics.ConsumeOutcomes.Requeued, started);
             }
             catch (OperationCanceledException)
                 when (stoppingToken.IsCancellationRequested)
@@ -278,6 +303,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
     private async Task HandleDeliveryAsync(
         IChannel channel,
         BasicDeliverEventArgs eventArgs,
+        long started,
         CancellationToken stoppingToken)
     {
         var body = eventArgs.Body.ToArray();
@@ -295,7 +321,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         activity?.SetTag(WaxyCandlesTelemetry.MessagingDestination, _topology.Queue);
         activity?.SetTag(WaxyCandlesTelemetry.RetryCount, retryCount);
 
-        var message = TryDeserialize(body);
+        var message = TryDeserialize(body, out var unreadableReason);
 
         if (message is null)
         {
@@ -312,6 +338,10 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 channel,
                 body,
                 eventArgs.BasicProperties,
+                new DeadLetterReason(
+                    DeadLetterHeaders.UnreadableReason,
+                    unreadableReason,
+                    retryCount),
                 stoppingToken);
 
             await channel.BasicAckAsync(
@@ -319,6 +349,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 multiple: false,
                 stoppingToken);
 
+            RecordConsumed(WaxyCandlesMetrics.ConsumeOutcomes.DeadLetteredUnreadable, started);
             return;
         }
 
@@ -340,6 +371,15 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 stoppingToken);
 
             activity?.SetTag(WaxyCandlesTelemetry.Outcome, outcome.ToString());
+
+            RecordConsumed(
+                outcome switch
+                {
+                    ConsumeOutcome.AlreadyProcessed => WaxyCandlesMetrics.ConsumeOutcomes.AlreadyProcessed,
+                    ConsumeOutcome.Skipped => WaxyCandlesMetrics.ConsumeOutcomes.Skipped,
+                    _ => WaxyCandlesMetrics.ConsumeOutcomes.Processed
+                },
+                started);
 
             switch (outcome)
             {
@@ -392,12 +432,22 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                     channel,
                     body,
                     eventArgs.BasicProperties,
+                    // The root cause: e.g. a DbUpdateException's message is
+                    // only "See the inner exception".
+                    new DeadLetterReason(
+                        ex.GetBaseException().GetType().FullName ?? ex.GetBaseException().GetType().Name,
+                        ex.GetBaseException().Message,
+                        retryCount),
                     stoppingToken);
 
                 await channel.BasicAckAsync(
                     eventArgs.DeliveryTag,
                     multiple: false,
                     stoppingToken);
+
+                RecordConsumed(
+                    WaxyCandlesMetrics.ConsumeOutcomes.DeadLetteredRetriesExhausted,
+                    started);
 
                 return;
             }
@@ -424,6 +474,10 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                     Headers = headers
                 };
 
+            // So the retry is still identifiable (MessageId/Type) by whatever
+            // reads it, as the original publish was.
+            DeadLetterHeaders.CopyMessageProperties(eventArgs.BasicProperties, properties);
+
             // mandatory: if the retry queue is missing, fail (and requeue the
             // original) rather than have the broker confirm a dropped message.
             await channel.BasicPublishAsync(
@@ -439,6 +493,8 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 multiple: false,
                 stoppingToken);
 
+            RecordConsumed(WaxyCandlesMetrics.ConsumeOutcomes.RetryScheduled, started);
+
             _logger.LogWarning(
                 "Message {MessageId} scheduled for retry {RetryCount}/{MaxRetries}.",
                 messageId,
@@ -447,7 +503,8 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         }
     }
 
-    private TMessage? TryDeserialize(byte[] body)
+    /// <summary>The message, or null (and why, for the dead-letter headers) if it can't be processed.</summary>
+    private TMessage? TryDeserialize(byte[] body, out string unreadableReason)
     {
         TMessage? message;
 
@@ -462,18 +519,82 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
                 "{MessageDescription} message is not valid JSON.",
                 MessageDescription);
 
+            unreadableReason = $"Not valid JSON: {ex.Message}";
             return null;
         }
 
-        return message is not null && IsValid(message)
-            ? message
-            : null;
+        if (message is null)
+        {
+            unreadableReason = "The payload is null.";
+            return null;
+        }
+
+        if (!IsValid(message))
+        {
+            unreadableReason = "The message is missing required fields or has invalid values.";
+            return null;
+        }
+
+        unreadableReason = string.Empty;
+        return message;
+    }
+
+    private ushort PrefetchCount()
+    {
+        var configured = _services
+            .GetService<IConfiguration>()?[PrefetchCountKey];
+
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            return DefaultPrefetchCount;
+        }
+
+        // 0 would mean "no limit" to the broker, which is what this avoids.
+        // An invalid value must not throw here: that would fail every
+        // reconnect attempt and the consumer would never start.
+        if (ushort.TryParse(configured, NumberStyles.None, CultureInfo.InvariantCulture, out var count) &&
+            count > 0)
+        {
+            return count;
+        }
+
+        _logger.LogWarning(
+            "{Key} must be a whole number from 1 to {Max}; using {Default}.",
+            PrefetchCountKey,
+            ushort.MaxValue,
+            DefaultPrefetchCount);
+
+        return DefaultPrefetchCount;
+    }
+
+    // Recorded once the delivery has been acked (or nacked back), so a
+    // dead-letter publish that fails and is requeued counts as requeued only.
+    // Never throws: it runs after the ack but inside the processing try, where
+    // an exception would schedule a retry of a delivery that was already acked.
+    private void RecordConsumed(string outcome, long started)
+    {
+        try
+        {
+            var queue = WaxyCandlesMetrics.Queue(_topology.Queue);
+            var outcomeTag = new KeyValuePair<string, object?>(WaxyCandlesMetrics.OutcomeTag, outcome);
+
+            WaxyCandlesMetrics.MessagesConsumed.Add(1, queue, outcomeTag);
+            WaxyCandlesMetrics.MessageProcessingDuration.Record(
+                WaxyCandlesMetrics.SecondsSince(started),
+                queue,
+                outcomeTag);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not record consumer metrics for {Queue}.", _topology.Queue);
+        }
     }
 
     private async Task PublishToDeadLetterAsync(
         IChannel channel,
         byte[] body,
         IReadOnlyBasicProperties? original,
+        DeadLetterReason reason,
         CancellationToken cancellationToken)
     {
         // Keeps the trace, so a dead-lettered message can be traced back to
@@ -481,13 +602,19 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         var headers = new Dictionary<string, object?>();
         MessageTracing.CopyHeaders(original, headers);
 
+        // Where it came from and why it failed, for whoever inspects the queue.
+        DeadLetterHeaders.Add(headers, _topology.Queue, reason, DateTimeOffset.UtcNow);
+
+        var properties = new BasicProperties { Persistent = true, Headers = headers };
+        DeadLetterHeaders.CopyMessageProperties(original, properties);
+
         // mandatory: if the dead-letter queue is missing, fail (and requeue the
         // original) rather than have the broker confirm a dropped message.
         await channel.BasicPublishAsync(
             exchange: _topology.DeadLetterExchange,
             routingKey: QueueTopology.DeadLetterRoutingKey,
             mandatory: true,
-            basicProperties: new BasicProperties { Persistent = true, Headers = headers },
+            basicProperties: properties,
             body: body,
             cancellationToken: cancellationToken);
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using WaxyCandles.Application.Alerts.Interfaces;
 using WaxyCandles.Application.MarketData;
@@ -61,11 +62,16 @@ public class PricePollingWorker : BackgroundService
                 continue;
             }
 
+            // Times the price update only, not the GEX level refresh before it.
+            long? pollStarted = null;
+
             try
             {
                 // Before the day's first prices, so they're checked against
                 // today's levels.
                 await RefreshGexLevelsIfDueAsync(now, stoppingToken);
+
+                pollStarted = Stopwatch.GetTimestamp();
 
                 // The root of each price's trace.
                 using var activity = WaxyCandlesTelemetry.Source.StartActivity("poll prices");
@@ -79,6 +85,9 @@ public class PricePollingWorker : BackgroundService
                 await marketDataService
                     .UpdatePricesAsync(stoppingToken);
 
+                RecordPoll(pollStarted.Value, "success");
+                PricePollingHeartbeat.RecordSuccess(_timeProvider.GetUtcNow());
+
                 _logger.LogInformation(
                     "Market data update completed.");
             }
@@ -89,6 +98,11 @@ public class PricePollingWorker : BackgroundService
             }
             catch (Exception ex)
             {
+                if (pollStarted is not null)
+                {
+                    RecordPoll(pollStarted.Value, "failure");
+                }
+
                 _logger.LogError(
                     ex,
                     "Error while updating market data and evaluating alerts.");
@@ -100,6 +114,11 @@ public class PricePollingWorker : BackgroundService
                 stoppingToken);
         }
     }
+
+    private static void RecordPoll(long started, string outcome) =>
+        WaxyCandlesMetrics.PricePollDuration.Record(
+            WaxyCandlesMetrics.SecondsSince(started),
+            new KeyValuePair<string, object?>(WaxyCandlesMetrics.OutcomeTag, outcome));
 
     /// <summary>
     /// Once per trading day (on the first poll, or on start-up mid-session),
