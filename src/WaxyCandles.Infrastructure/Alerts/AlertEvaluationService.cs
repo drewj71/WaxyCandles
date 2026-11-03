@@ -41,6 +41,8 @@ public class AlertEvaluationService : IAlertEvaluationService
             // it still counts.
             var at = observedAt ?? DateTimeOffset.UtcNow;
 
+            var fired = new List<Alert>();
+
             var alerts = await _dbContext.Alerts
                 .AsNoTracking()
                 .Where(AlertQueries.IsWatching(at))
@@ -56,6 +58,7 @@ public class AlertEvaluationService : IAlertEvaluationService
                     if (await TryClaimTriggerAsync(alert, at, cancellationToken))
                     {
                         AddTriggeredEvent(alert, price);
+                        fired.Add(alert);
                     }
                 }
                 else if (alert.IsTriggered &&
@@ -73,6 +76,17 @@ public class AlertEvaluationService : IAlertEvaluationService
             if (ownTransaction is not null)
             {
                 await ownTransaction.CommitAsync(cancellationToken);
+            }
+
+            // After the save. Inside a caller's transaction (the AlertWorker)
+            // a later rollback means the fire is retried and counted again.
+            foreach (var alert in fired)
+            {
+                WaxyCandlesMetrics.AlertsFired.Add(
+                    1,
+                    new KeyValuePair<string, object?>(
+                        WaxyCandlesMetrics.KindTag,
+                        alert.Level is null ? "price" : "level"));
             }
         }
         finally

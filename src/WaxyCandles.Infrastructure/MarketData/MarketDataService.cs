@@ -68,6 +68,7 @@ public class MarketDataService : IMarketDataService
                 cancellationToken);
 
         var polledAt = DateTimeOffset.UtcNow;
+        var stored = 0;
 
         foreach (var symbol in symbols)
         {
@@ -123,8 +124,11 @@ public class MarketDataService : IMarketDataService
 
             _dbContext.StockPrices.Add(stockPrice);
             _dbContext.OutboxMessages.Add(outboxMessage);
+            stored++;
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+
+        WaxyCandlesMetrics.PricesStored.Add(stored);
     }
 }

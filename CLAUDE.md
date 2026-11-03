@@ -30,7 +30,7 @@ For an end-to-end run, RabbitMQ plus the API and all three workers must be runni
 
 EF Core migrations live in `src/WaxyCandles.Infrastructure/Migrations` and are committed to source control.
 
-The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, rate limiting and startup config, about 440 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. A full run takes about 7 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
+The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, metrics, retention, rate limiting and startup config, about 490 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. Metric tests use `MetricRecorder` (a `MeterListener`) in the non-parallel `Metrics` collection. A full run takes about 9 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
 
 ### Frontend (from `web/`)
 
@@ -54,6 +54,8 @@ Secrets are NOT stored in appsettings files. In Development they come from `dotn
 | `RabbitMQ:Password` | API and all workers; optional (with optional non-secret `RabbitMQ:Username`/`VirtualHost`), each applied only when non-empty, else the client default (`guest`) |
 
 Required non-secret setting: `Cors:AllowedOrigins` (array) on the API. Startup fails if it is empty or contains `*`. Set in the API's `launchSettings.json` for `dotnet run`, and by `Cors__AllowedOrigins__0` (compose: `CORS_ALLOWED_ORIGIN`, default `http://localhost:5173`) in Docker. `dotnet run --no-launch-profile` needs it set by hand.
+
+Optional non-secret settings with defaults in code: `RabbitMQ:PrefetchCount` (consumers, default 10; an invalid value logs a warning and uses 10) and the OutboxWorker's `Retention:{Interval,InitialDelay,OutboxMessageRetention,ProcessedMessageRetention,StockPriceRetention,BatchSize}` (see Async pipeline; validated at startup, including upper bounds).
 
 - `appsettings.json` holds structure and non-secret values only (e.g. RabbitMQ host `localhost`). Secret keys are present but blank.
 - Never write a real secret into a tracked file, and never read, print, or log secret values.
@@ -81,9 +83,22 @@ Market data access is abstracted behind `IMarketDataProvider` (Application layer
 
 `GET /api/stocks/{symbol}/gex` (web page `/gex`) is synchronous request/response, outside the messaging pipeline. `GexService` (Infrastructure/Options) takes a quote to centre the strike window, fetches that slice of the chain through `IOptionsDataProvider` (Market Data only; separate from `IMarketDataProvider`), and `GexCalculator` (Application/Options/Gex) builds the strike × expiration table, with calls positive and puts negative under the naive dealer model. Provider gamma is used when present, else Black-Scholes from the provider's IV or IV solved from the mid. Vanna is always Black-Scholes. The chain is fetched and cached for the request's window rounded up to a fixed ladder (`GexFetchWindow`: days 0/7/14/30/60/90/180/365, strike range 1/2/5/10/15/20/30/40/50%), so near-identical requests share one billed fetch; the table is still built from the exact requested window. Cached in memory per symbol and ladder window for `Gex:CacheDuration` (default 1 minute, misses included). The web presets and level-alert defaults are ladder steps. Market Data bills live/delayed chains per contract, so keep requests windowed; `MarketDataApp:OptionsMode` = `cached` (paid plans only) makes it 1 credit per request. Trial accounts get the previous session's chain.
 
-### Distributed tracing
+### Telemetry: distributed tracing and metrics
 
 OpenTelemetry, registered by `AddWaxyCandlesTelemetry(serviceName)` (Infrastructure/Telemetry) in each `Program.cs`, and only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (it is in every `launchSettings.json`, pointing at the Aspire dashboard from `docker-compose.yml`). Traces include the app's spans (`WaxyCandlesTelemetry.Source`), outgoing HTTP, SQL and, in the API, incoming requests; logs carry their span's trace ID. Trace context crosses the outbox in `OutboxMessage.TraceParent`/`TraceState` (`MessageTracing.Stamp` when the row is written) and RabbitMQ in `traceparent`/`tracestate` headers (injected by the outbox publisher; read by `RabbitMqConsumer`, which also copies them onto retry and dead-letter publishes). So one price is one trace: poll → store price → publish → process (each attempt a span) → alert outbox row → publish → process → SignalR push. Any new outbox write should call `MessageTracing.Stamp`. Tracing never affects processing: missing or malformed context starts a new trace, and with no listener nothing is recorded.
+
+Metrics use the `WaxyCandles` meter (`WaxyCandlesMetrics`), exported over OTLP under the same `OTEL_EXPORTER_OTLP_ENDPOINT` condition, plus HttpClient metrics. Instruments:
+- outbox: `outbox.published` (by queue), and gauges `outbox.pending`, `outbox.oldest_pending_age`, `outbox.unroutable`;
+- `queue.messages` for each main, retry and dead-letter queue (a dead-letter queue above 0 is the "a message was lost" signal);
+- consumers: `messages.consumed` and `messages.processing.duration`, by queue and outcome (processed, already_processed, skipped, retry_scheduled, dead_lettered_retries_exhausted, dead_lettered_unreadable, requeued);
+- poller: `price_poll.duration`, `prices.stored`, `price_poll.last_success` (also readable from code via `PricePollingHeartbeat`);
+- `alerts.fired` (by kind; can over-count if the AlertWorker's commit fails, so `outbox.published{queue=alert-triggered}` is the committed count);
+- `marketdata.requests`, and `marketdata.credits` from Market Data's per-request `X-Api-Ratelimit-Consumed` header, plus `marketdata.credits_remaining`. Daily plans reset at 9:30 ET.
+
+All names are prefixed `waxycandles.`. Rules:
+- Tags are low-cardinality only (queue, outcome, endpoint, kind), never a symbol, user or message id.
+- Gauges report values cached by the loop that owns them, and their callbacks never do I/O. The outbox backlog is read each poll. Queue depth is read every 15s by passive declares on a separate channel, with a 5s limit, and skipped while the publish channel is down.
+- Metric recording must never change message handling (the consumer's recording swallows its own errors).
 
 ### GEX level alerts
 
@@ -106,6 +121,22 @@ Price Polling Worker -> writes StockPrice + OutboxMessage (same DB transaction)
 - Each queue's topology (queue, `<name>-retry`, `-dlx`/`-dead-letter`) and its retry policy (`MaxRetries`, `RetryDelay`) are defined once in `QueueTopology` (Infrastructure/Messaging); producers and consumers both declare it with identical arguments. `stock-price-updated` retries 2x at 5s; `alert-triggered` 5x at 30s. `RetryDelay` is the retry queue's `x-message-ttl`, so changing it for a queue that already exists on a broker causes 406 PRECONDITION_FAILED until that queue is deleted. Add a new message type by adding a topology and a `MessageRoutes` entry. The outbox leaves rows of unrouted types pending. `OutboxMessage.Type` and the routes use each contract's `MessageType` constant (not `nameof`); never change an existing value, or pending rows stop routing (`MessageRoutesTests` pins them).
 - The OutboxWorker, like the consumers, resolves `RabbitMqConnection` lazily inside its loop, so it starts while the broker is down and retries every poll (5s). The connection's constructor is synchronous and ignores cancellation, so an unresponsive broker host can hold up shutdown for the client's ~30s connect timeout.
 - Consumers derive from `RabbitMqConsumer<TMessage>`, which owns transport concerns: reconnect loop, publisher-confirmed mandatory retry/dead-letter publishes, requeue safety net, unreadable payloads straight to the dead-letter queue. Subclasses implement `IsValid` and `ProcessAsync` and are responsible for idempotency.
+- Consumers set a `BasicQos` prefetch (`RabbitMQ:PrefetchCount`, default 10) before subscribing. Automatic recovery re-applies it. Messages are still handled one at a time; keep it that way unless per-symbol ordering is re-examined.
+- Retry and dead-letter publishes keep the original's `MessageId`/`Type`/`ContentType`/`CorrelationId`.
+- Dead-letters add:
+  - `x-original-queue`;
+  - `x-exception-type`: the root exception's type, or `unreadable`;
+  - `x-exception-message`: up to 1024 characters;
+  - `x-failed-at`;
+  - `x-dead-letter-retry-count`: informational.
+
+  Dead-letters never carry the live `x-retry-count`, so a message moved back to its queue gets its full retry budget.
+- The OutboxWorker also runs `DataRetentionWorker` (Infrastructure/Retention): 1 minute after start, then every `Retention:Interval` (1h). It deletes, in paused `DELETE TOP (BatchSize)` batches (default 1000):
+  - processed outbox rows older than 7 days (pending rows never);
+  - `ProcessedMessages` claims older than 7 days;
+  - `StockPrices` older than 30 days, except each symbol's latest price, which every reader relies on.
+
+  Each table fails independently and is retried the next pass. The `ProcessedMessages` window must stay far longer than any redelivery path, and a future dead-letter replay tool must stay inside it. The publisher's pending query uses the filtered `IX_OutboxMessages_Pending`, and `OutboxMessage.Type` is `nvarchar(200)`. Building these indexes on a large outbox table blocks the publisher and poller while it runs, so apply that migration when the market is closed.
 - Idempotency: `StockPriceConsumer` claims a `ProcessedMessage` row inside the transaction that evaluates alerts, and `AlertEvaluationService` fires and re-arms alerts only through conditional updates that re-check, at write time, that the alert is unchanged since it was read (target/direction/frequency), still in the expected state, and that the price's observation time (`StockPriceUpdatedMessage.Timestamp`) is newer than the alert's `StateChangedAt` — so concurrent or out-of-order evaluations emit one event per fire, and an edit (which re-arms and stamps `StateChangedAt`) can't be overridden by a stale price; `AlertTriggeredConsumer` relies on the unique `Notification.SourceMessageId`, and its SignalR push has a 5s timeout because it runs before the ack. Check this when touching any consumer logic.
 - The SignalR push (`/hubs/notifications`, cookie-authenticated) only reaches clients on the API instance that consumed the message; more than one API instance would need a SignalR backplane.
 

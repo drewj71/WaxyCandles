@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -10,13 +11,14 @@ namespace WaxyCandles.Infrastructure.Telemetry;
 
 public static class TelemetryExtensions
 {
-    /// <summary>The standard OpenTelemetry setting for where to send traces and logs.</summary>
+    /// <summary>The standard OpenTelemetry setting for where to send traces, metrics and logs.</summary>
     public const string OtlpEndpointKey = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
     /// <summary>
-    /// Exports traces (the app's spans, outgoing HTTP, SQL) and logs over OTLP,
-    /// when <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> is set. Unset means tracing is
-    /// off: no listener, so no spans are created and nothing changes.
+    /// Exports traces (the app's spans, outgoing HTTP, SQL), metrics (the app's
+    /// <see cref="WaxyCandlesMetrics"/> and outgoing HTTP) and logs over OTLP,
+    /// when <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> is set. Unset means telemetry is
+    /// off: no listener, so no spans or measurements are recorded and nothing changes.
     /// Sampling follows the standard <c>OTEL_TRACES_SAMPLER</c> settings
     /// (default: every trace).
     /// </summary>
@@ -57,6 +59,14 @@ public static class TelemetryExtensions
                     .AddSqlClientInstrumentation();
 
                 configureTracing?.Invoke(tracing);
+            })
+            .WithMetrics(metrics =>
+            {
+                metrics
+                    .AddMeter(WaxyCandlesMetrics.MeterName)
+                    // http.client.request.duration, tagged by host and status
+                    // only (no URL path, so no symbols).
+                    .AddHttpClientInstrumentation();
             })
             .UseOtlpExporter();
 
