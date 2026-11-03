@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.Infrastructure.MarketData.Providers;
 
@@ -9,6 +11,22 @@ namespace WaxyCandles.Infrastructure.MarketData.Providers;
 internal static class MarketDataAppApi
 {
     public const string BaseUrl = "https://api.marketdata.app/v1";
+
+    // Usage headers on every response (docs/api/rate-limiting): the credits
+    // this request cost, and what's left in the current window (a day on
+    // Free/Starter/Trader, resetting 9:30 ET; a minute on Quant/Prime).
+    public const string CreditsConsumedHeader = "X-Api-Ratelimit-Consumed";
+    public const string CreditsRemainingHeader = "X-Api-Ratelimit-Remaining";
+
+    /// <summary>Endpoint kinds, the waxycandles.marketdata.* "endpoint" tag.</summary>
+    public static class Endpoints
+    {
+        public const string Prices = "prices";
+        public const string Candles = "candles";
+        public const string OptionChain = "option_chain";
+        public const string MarketStatus = "market_status";
+        public const string Other = "other";
+    }
 
     /// <summary>
     /// Sends an authenticated GET. Returns null when Market Data has no data for
@@ -29,6 +47,43 @@ internal static class MarketDataAppApi
                 "Market Data API token is not configured (MarketDataApp:ApiToken).");
         }
 
+        var endpoint = EndpointOf(url);
+        var outcome = "error";
+
+        try
+        {
+            var document = await SendAsync(
+                httpClient,
+                token,
+                url,
+                endpoint,
+                cancellationToken);
+
+            outcome = document is null ? "no_data" : "ok";
+            return document;
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            outcome = "cancelled";
+            throw;
+        }
+        finally
+        {
+            WaxyCandlesMetrics.MarketDataRequests.Add(
+                1,
+                new KeyValuePair<string, object?>(WaxyCandlesMetrics.EndpointTag, endpoint),
+                new KeyValuePair<string, object?>(WaxyCandlesMetrics.OutcomeTag, outcome));
+        }
+    }
+
+    private static async Task<JsonDocument?> SendAsync(
+        HttpClient httpClient,
+        string token,
+        string url,
+        string endpoint,
+        CancellationToken cancellationToken)
+    {
         // Header rather than ?token=, so the token never ends up in logged URLs.
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization =
@@ -37,6 +92,8 @@ internal static class MarketDataAppApi
         using var response = await httpClient.SendAsync(
             request,
             cancellationToken);
+
+        RecordCredits(response, endpoint);
 
         if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)
         {
@@ -74,6 +131,51 @@ internal static class MarketDataAppApi
         throw new InvalidOperationException(
             $"Market Data error: {ErrorMessage(json)}");
     }
+
+    /// <summary>The endpoint kind of a request URL. Never the symbol or other path segments.</summary>
+    internal static string EndpointOf(string url)
+    {
+        var path = Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            ? uri.AbsolutePath
+            : url;
+
+        return path switch
+        {
+            _ when path.Contains("/stocks/prices/", StringComparison.OrdinalIgnoreCase) => Endpoints.Prices,
+            _ when path.Contains("/stocks/candles/", StringComparison.OrdinalIgnoreCase) => Endpoints.Candles,
+            _ when path.Contains("/options/chain/", StringComparison.OrdinalIgnoreCase) => Endpoints.OptionChain,
+            _ when path.Contains("/markets/status/", StringComparison.OrdinalIgnoreCase) => Endpoints.MarketStatus,
+            _ => Endpoints.Other
+        };
+    }
+
+    // Read whatever the status: Market Data says only 200/203 are charged,
+    // and reports what it charged, so this records its own figure.
+    private static void RecordCredits(HttpResponseMessage response, string endpoint)
+    {
+        if (HeaderLong(response, CreditsConsumedHeader) is { } consumed and > 0)
+        {
+            WaxyCandlesMetrics.MarketDataCredits.Add(
+                consumed,
+                new KeyValuePair<string, object?>(WaxyCandlesMetrics.EndpointTag, endpoint));
+        }
+
+        // Can go negative: one request may cost more than the balance left.
+        if (HeaderLong(response, CreditsRemainingHeader) is { } remaining)
+        {
+            WaxyCandlesMetrics.SetMarketDataCreditsRemaining(remaining);
+        }
+    }
+
+    private static long? HeaderLong(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values) &&
+        long.TryParse(
+            values.FirstOrDefault(),
+            NumberStyles.AllowLeadingSign,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : null;
 
     private static string ErrorMessage(string json)
     {
