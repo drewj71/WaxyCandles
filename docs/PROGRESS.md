@@ -12,16 +12,27 @@ Update this at the end of each working session.
 - [ ] **Live-test GEX level alerts** (`feat/gex-level-alerts`): create one from a GEX level card,
   check the next morning's refresh log ("Alert ...: SPY King is at ...; target now ..."), and that a
   notification reads "SPY rose above $X, approaching its King node at $Y".
-- [ ] **Roadmap Phase 1** (from the 2026-11-02 review; IDs below):
-  - DATA-2: a filtered index for pending outbox rows, and `OutboxMessage.Type` capped at `nvarchar(200)`.
-  - DATA-1: a retention job for processed outbox rows, `ProcessedMessages` (keep days, not minutes),
-    and old `StockPrices` (always keep the latest per symbol).
-  - MSG-1: retry and dead-letter publishes should keep `MessageId`/`Type` and record why a message failed.
-  - MSG-2: consumer prefetch (`BasicQos`); keep dispatch concurrency at 1.
-  - Migrations land one at a time.
-- [ ] **Metrics and health checks** (OPS-1/OPS-2, agreed 2026-10-16): outbox backlog/age, queue depth,
-  dead-letter count, alerts fired, Market Data credits per day (for the plan decision before the
-  trial ends ~2026-11-13); `/health` for the API and workers.
+- [ ] **Watch Market Data credits per day** before the trial ends ~2026-11-13: sum
+  `waxycandles.marketdata.credits` per day (plans reset 9:30 ET) in the Aspire dashboard, by endpoint.
+  This is the input for the plan decision.
+- [ ] **Deploy Phase 1**: apply migration `OutboxIndexesAndRetention` while the market is closed (index
+  builds on the never-pruned outbox table block the publisher and poller). Expect the first
+  retention pass to purge the backlog in paused batches.
+- [ ] **Roadmap Phase 2**:
+  - OPS-2: health checks (`/health/live`, `/health/ready` with DB and broker for the API; a heartbeat
+    for the workers, using `PricePollingHeartbeat`, stale only during market hours).
+  - REL-2: SQL transient-fault handling with an execution strategy around every explicit transaction.
+  - SEC-3: refresh tokens stored hashed (forces one re-login).
+  - REL-3: explicit HttpClient timeouts for the vendor clients.
+- [ ] **Phase 1 follow-ups**:
+  - Retention metrics (rows deleted per table) now that the Meter exists.
+  - An index on `StockPrices.Timestamp` if the retention delete shows up as slow.
+  - Make `Prefetch_limit_lets_a_second_consumer_share_a_backlog` deterministic: it depends on
+    timing and could flake on a slow CI agent.
+  - Record `alerts.fired` after the AlertWorker's commit (it can over-count today).
+  - Any future dead-letter replay tool must stay inside the `ProcessedMessages` window (7 days).
+  - Existing gap, not from Phase 1: creating an alert doesn't set `StateChangedAt`, so a price
+    delayed in the pipeline that was observed before the alert existed can still fire it.
 - [ ] **Decisions needed from Phase 0**:
   - `POST /api/stocks/{symbol}/historical` isn't called by the web app: keep it (now 5/min per user),
     make it admin-only, or remove it?
@@ -48,6 +59,34 @@ Update this at the end of each working session.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
 
 ## Log
+
+### 2026-11-02 (Phase 1)
+- Roadmap Phase 1, two parallel agents in separate worktrees, combined on `integration/phase1`.
+- `feat/outbox-index-retention` (Workstream C):
+  - DATA-2: migration `OutboxIndexesAndRetention`. `OutboxMessage.Type` is now `nvarchar(200)`,
+    with filtered `IX_OutboxMessages_Pending` (CreatedAt INCLUDE Type, unprocessed rows) and
+    `IX_OutboxMessages_Processed`, and an index on `ProcessedMessages.ProcessedAt`.
+  - DATA-1: `DataRetentionWorker` in the OutboxWorker deletes, hourly and in batches, processed
+    outbox rows and `ProcessedMessages` after 7 days and `StockPrices` after 30 days, keeping each
+    symbol's latest price.
+  - messaging-reviewer: no defects. I fixed its low findings: upper bounds on the retention options
+    (an out-of-range delay could stop the host), no false failure logged on shutdown, and a 100 ms
+    pause between full batches.
+- `feat/messaging-metrics-dlq` (Workstream D):
+  - OPS-1: the `WaxyCandles` meter (outbox backlog, queue and dead-letter depth, consumer outcomes,
+    poll health, alerts fired, Market Data credits from `X-Api-Ratelimit-Consumed`).
+  - MSG-1: retry and dead-letter publishes keep `MessageId`/`Type`, and dead-letters say where, why
+    and when.
+  - MSG-2: consumer prefetch of 10.
+  - messaging-reviewer: no defect that loses or duplicates a message. I fixed its findings:
+    - a dead-letter now records retries in `x-dead-letter-retry-count`, not the live
+      `x-retry-count`, so a message moved back to its queue gets a full retry budget;
+    - consumer metric recording can't throw into message handling;
+    - an invalid `RabbitMQ:PrefetchCount` warns and uses 10 instead of stopping the consumer;
+    - the queue-depth refresh has a 5 s limit and is skipped while the publish channel is down;
+    - dead-letters record the root exception.
+- The example appsettings files now list `Retention` (OutboxWorker) and `RabbitMQ:PrefetchCount`
+  (API and AlertWorker).
 
 ### 2026-11-02
 - Architecture review and a prioritized roadmap. I found no P0 issue for the current local-only
