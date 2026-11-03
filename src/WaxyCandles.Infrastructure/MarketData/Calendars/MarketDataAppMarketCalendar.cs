@@ -88,7 +88,8 @@ public class MarketDataAppMarketCalendar : IMarketCalendar
         try
         {
             using var document = await MarketDataAppApi.GetAsync(
-                _httpClientFactory.CreateClient(),
+                // The stock provider's named client, for its timeout.
+                _httpClientFactory.CreateClient(MarketDataAppApi.HttpClientName),
                 _configuration,
                 $"{MarketDataAppApi.BaseUrl}/markets/status/" +
                 $"?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}",

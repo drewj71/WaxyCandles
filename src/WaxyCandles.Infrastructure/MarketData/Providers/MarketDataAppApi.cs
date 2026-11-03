@@ -12,6 +12,14 @@ internal static class MarketDataAppApi
 {
     public const string BaseUrl = "https://api.marketdata.app/v1";
 
+    /// <summary>
+    /// Named HttpClients, each with its timeout (HttpClientTimeouts): stock
+    /// prices, candles and the market calendar share one; option chains,
+    /// which are larger, have their own.
+    /// </summary>
+    public const string HttpClientName = "MarketDataApp";
+    public const string OptionsHttpClientName = "MarketDataApp.Options";
+
     // Usage headers on every response (docs/api/rate-limiting): the credits
     // this request cost, and what's left in the current window (a day on
     // Free/Starter/Trader, resetting 9:30 ET; a minute on Quant/Prime).
@@ -66,6 +74,15 @@ internal static class MarketDataAppApi
             when (cancellationToken.IsCancellationRequested)
         {
             outcome = "cancelled";
+            throw;
+        }
+        // HttpClient.Timeout. Never retried: a response that was already
+        // being sent may have been billed. The caller sees the exception (the
+        // poller logs it and polls again on schedule; the API returns 500).
+        catch (TaskCanceledException ex)
+            when (ex.InnerException is TimeoutException)
+        {
+            outcome = "timeout";
             throw;
         }
         finally
