@@ -4,7 +4,9 @@ public class RefreshToken
 {
     public Guid Id { get; set; }
 
-    public string Token { get; set; } = string.Empty;
+    // SHA-256 of the token handed to the client (TokenService.HashRefreshToken).
+    // The plaintext is never stored, so a database leak gives no usable session.
+    public byte[] TokenHash { get; set; } = [];
 
     public string UserId { get; set; } = string.Empty;
 

@@ -87,6 +87,30 @@ public class TokenServiceTests
         Assert.Equal(tokens.Count, tokens.Distinct().Count());
     }
 
+    [Fact]
+    public void Refresh_token_hash_is_sha256_of_the_utf8_token()
+    {
+        // FIPS 180-2 test vector for "abc". The HashRefreshTokens migration
+        // hashes existing rows with HASHBYTES('SHA2_256', varchar), so this
+        // must stay plain SHA-256 over the token's (ASCII) bytes.
+        Assert.Equal(
+            "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD",
+            Convert.ToHexString(TokenService.HashRefreshToken("abc")));
+    }
+
+    [Fact]
+    public void Refresh_token_hash_is_fixed_length_and_deterministic()
+    {
+        var token = _tokenService.GenerateRefreshToken();
+
+        var hash = TokenService.HashRefreshToken(token);
+
+        Assert.Equal(TokenService.RefreshTokenHashLength, hash.Length);
+        Assert.Equal(32, hash.Length);
+        Assert.Equal(hash, TokenService.HashRefreshToken(token));
+        Assert.NotEqual(hash, TokenService.HashRefreshToken(_tokenService.GenerateRefreshToken()));
+    }
+
     private static ClaimsPrincipal Validate(
         string token,
         string signingKey = IntegrationFixture.TestJwtSecret) =>

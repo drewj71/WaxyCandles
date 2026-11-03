@@ -129,10 +129,13 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
         {
             entity.HasKey(x => x.Id);
 
-            entity.Property(x => x.Token)
-                .IsRequired();
+            // binary(32): a fixed-length SHA-256 of the refresh token.
+            entity.Property(x => x.TokenHash)
+                .IsRequired()
+                .HasMaxLength(Authentication.TokenService.RefreshTokenHashLength)
+                .IsFixedLength();
 
-            entity.HasIndex(x => x.Token)
+            entity.HasIndex(x => x.TokenHash)
                 .IsUnique();
 
             entity.HasIndex(x => x.UserId);
