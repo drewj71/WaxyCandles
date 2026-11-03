@@ -87,7 +87,7 @@ public static class WaxyCandlesMetrics
     public static readonly Counter<long> MarketDataRequests = Meter.CreateCounter<long>(
         "waxycandles.marketdata.requests",
         unit: "{request}",
-        description: "Market Data (marketdata.app) requests, by endpoint kind and outcome (ok/no_data/error/cancelled).");
+        description: "Market Data (marketdata.app) requests, by endpoint kind and outcome (ok/no_data/error/timeout/cancelled).");
 
     public static readonly Counter<long> MarketDataCredits = Meter.CreateCounter<long>(
         "waxycandles.marketdata.credits",

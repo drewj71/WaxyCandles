@@ -26,75 +26,116 @@ public class AlertEvaluationService : IAlertEvaluationService
     DateTimeOffset? observedAt = null,
     CancellationToken cancellationToken = default)
     {
-        // Claiming a trigger and writing its event must commit together. The
-        // AlertWorker calls this inside its own transaction; otherwise use one here.
-        var ownTransaction =
-            _dbContext.Database.CurrentTransaction is null
-                ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
-                : null;
-
-        try
+        // Claiming a trigger and writing its event must commit together.
+        if (_dbContext.Database.CurrentTransaction is not null)
         {
-            // Everything time-based is judged at the price's observation time:
-            // expiry, cooldown, and whether this price is newer than the alert's
-            // last state change. A price observed before expiry but retried after
-            // it still counts.
-            var at = observedAt ?? DateTimeOffset.UtcNow;
+            // The AlertWorker's transaction, which also holds its claim on the
+            // message. The caller owns the execution strategy, so a transient
+            // error re-runs the caller's whole attempt, this included.
+            var fired = await EvaluateOnceAsync(symbol, price, observedAt, added: null, cancellationToken);
 
-            var fired = new List<Alert>();
+            // After the save. A later rollback in the caller (the AlertWorker)
+            // means the fire is retried and counted again.
+            RecordFired(fired);
+            return;
+        }
 
-            var alerts = await _dbContext.Alerts
-                .AsNoTracking()
-                .Where(AlertQueries.IsWatching(at))
-                .Where(a => a.Symbol == symbol)
-                .ToListAsync(cancellationToken);
+        // No caller transaction: use one here, inside the execution strategy
+        // so a transient error re-runs the whole evaluation.
+        var addedEvents = new List<OutboxMessage>();
 
-            foreach (var alert in alerts)
+        var committed = await _dbContext.Database.CreateExecutionStrategy().ExecuteAsync(
+            async ct =>
             {
-                var conditionMet = alert.IsConditionMet(price);
-
-                if (!alert.IsTriggered && conditionMet)
+                // A failed attempt's events were rolled back but are still
+                // tracked. Detach only those: the change tracker may hold the
+                // caller's own entities.
+                foreach (var stale in addedEvents)
                 {
-                    if (await TryClaimTriggerAsync(alert, at, cancellationToken))
-                    {
-                        AddTriggeredEvent(alert, price);
-                        fired.Add(alert);
-                    }
+                    _dbContext.Entry(stale).State = EntityState.Detached;
                 }
-                else if (alert.IsTriggered &&
-                         !conditionMet &&
-                         alert.Frequency == AlertFrequency.EveryCross)
+
+                addedEvents.Clear();
+
+                await using var transaction =
+                    await _dbContext.Database.BeginTransactionAsync(ct);
+
+                var fired = await EvaluateOnceAsync(symbol, price, observedAt, addedEvents, ct);
+
+                await transaction.CommitAsync(ct);
+
+                return fired;
+            },
+            cancellationToken);
+
+        // Only once committed, so a retried attempt isn't counted twice.
+        RecordFired(committed);
+    }
+
+    /// <summary>
+    /// One evaluation, read to save. Safe to run again after a rollback: it
+    /// re-reads the alerts, and after an ambiguous commit the conditional
+    /// updates no longer match (already fired, or re-armed with a newer
+    /// <c>StateChangedAt</c>), so nothing fires twice.
+    /// </summary>
+    private async Task<List<Alert>> EvaluateOnceAsync(
+        string symbol,
+        decimal price,
+        DateTimeOffset? observedAt,
+        List<OutboxMessage>? added,
+        CancellationToken cancellationToken)
+    {
+        // Everything time-based is judged at the price's observation time:
+        // expiry, cooldown, and whether this price is newer than the alert's
+        // last state change. A price observed before expiry but retried after
+        // it still counts.
+        var at = observedAt ?? DateTimeOffset.UtcNow;
+
+        var fired = new List<Alert>();
+
+        var alerts = await _dbContext.Alerts
+            .AsNoTracking()
+            .Where(AlertQueries.IsWatching(at))
+            .Where(a => a.Symbol == symbol)
+            .ToListAsync(cancellationToken);
+
+        foreach (var alert in alerts)
+        {
+            var conditionMet = alert.IsConditionMet(price);
+
+            if (!alert.IsTriggered && conditionMet)
+            {
+                if (await TryClaimTriggerAsync(alert, at, cancellationToken))
                 {
-                    // The price moved back across the target: arm it for the next
-                    // cross. No event; a notification only ever means "it fired".
-                    await RearmAsync(alert, at, cancellationToken);
+                    var outboxMessage = AddTriggeredEvent(alert, price);
+                    added?.Add(outboxMessage);
+                    fired.Add(alert);
                 }
             }
-
-            await _dbContext.SaveChangesAsync(cancellationToken);
-
-            if (ownTransaction is not null)
+            else if (alert.IsTriggered &&
+                     !conditionMet &&
+                     alert.Frequency == AlertFrequency.EveryCross)
             {
-                await ownTransaction.CommitAsync(cancellationToken);
-            }
-
-            // After the save. Inside a caller's transaction (the AlertWorker)
-            // a later rollback means the fire is retried and counted again.
-            foreach (var alert in fired)
-            {
-                WaxyCandlesMetrics.AlertsFired.Add(
-                    1,
-                    new KeyValuePair<string, object?>(
-                        WaxyCandlesMetrics.KindTag,
-                        alert.Level is null ? "price" : "level"));
+                // The price moved back across the target: arm it for the next
+                // cross. No event; a notification only ever means "it fired".
+                await RearmAsync(alert, at, cancellationToken);
             }
         }
-        finally
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return fired;
+    }
+
+    private static void RecordFired(IEnumerable<Alert> fired)
+    {
+        foreach (var alert in fired)
         {
-            if (ownTransaction is not null)
-            {
-                await ownTransaction.DisposeAsync();
-            }
+            WaxyCandlesMetrics.AlertsFired.Add(
+                1,
+                new KeyValuePair<string, object?>(
+                    WaxyCandlesMetrics.KindTag,
+                    alert.Level is null ? "price" : "level"));
         }
     }
 
@@ -185,7 +226,7 @@ public class AlertEvaluationService : IAlertEvaluationService
         DateTimeOffset at) =>
         a => a.StateChangedAt == null || a.StateChangedAt < at;
 
-    private void AddTriggeredEvent(Alert alert, decimal price)
+    private OutboxMessage AddTriggeredEvent(Alert alert, decimal price)
     {
         var message = new AlertTriggeredMessage
         {
@@ -224,5 +265,7 @@ public class AlertEvaluationService : IAlertEvaluationService
             }));
 
         _dbContext.OutboxMessages.Add(outboxMessage);
+
+        return outboxMessage;
     }
 }

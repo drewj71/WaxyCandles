@@ -21,6 +21,7 @@ using WaxyCandles.Application.Notifications.Interfaces;
 using WaxyCandles.Infrastructure.Notifications;
 using WaxyCandles.Application.Options.Interfaces;
 using WaxyCandles.Infrastructure.Options;
+using WaxyCandles.Infrastructure.Resilience;
 
 namespace WaxyCandles.Infrastructure;
 
@@ -30,10 +31,22 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        // Read now, so a bad value stops startup naming the key.
+        var retry = DatabaseRetrySettings.From(configuration);
+        var timeouts = HttpClientTimeouts.From(configuration);
+
         services.AddDbContext<AppDbContext>(options =>
         {
+            // Transient SQL errors (deadlocks, dropped connections, failover)
+            // are retried in-process. So every explicit transaction must run
+            // inside Database.CreateExecutionStrategy().ExecuteAsync, with a
+            // delegate that is safe to run again from the start.
             options.UseSqlServer(
-                configuration.GetConnectionString("DefaultConnection"));
+                configuration.GetConnectionString("DefaultConnection"),
+                sql => sql.EnableRetryOnFailure(
+                    retry.MaxRetryCount,
+                    retry.MaxRetryDelay,
+                    errorNumbersToAdd: null));
         });
 
         services.AddScoped<IMarketDataService, MarketDataService>();
@@ -43,13 +56,16 @@ public static class DependencyInjection
         services.AddScoped<IWatchlistService, WatchlistService>();
         services.AddScoped<INotificationService, NotificationService>();
 
-        services.AddMarketDataProvider(configuration);
+        services.AddMarketDataProvider(configuration, timeouts);
 
         // Market Data is the only options vendor so far; it needs
-        // MarketDataApp:ApiToken only when a chain is requested.
+        // MarketDataApp:ApiToken only when a chain is requested. Vendor clients
+        // get a timeout and nothing more: no retries (see HttpClientTimeouts).
         services.AddHttpClient<
             IOptionsDataProvider,
-            MarketDataAppOptionsDataProvider>();
+            MarketDataAppOptionsDataProvider>(
+            MarketDataAppApi.OptionsHttpClientName,
+            client => client.Timeout = timeouts.MarketDataAppOptions);
         services.AddMemoryCache();
         services.Configure<GexOptions>(
             configuration.GetSection(GexOptions.SectionName));
@@ -60,11 +76,14 @@ public static class DependencyInjection
         return services;
     }
 
+    public const string AlphaVantageHttpClientName = "AlphaVantage";
+
     // MarketData:Provider picks the vendor; unset means Alpha Vantage, which
     // keeps workers that never fetch market data free of provider config.
     private static IServiceCollection AddMarketDataProvider(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        HttpClientTimeouts timeouts)
     {
         var provider = configuration["MarketData:Provider"];
 
@@ -75,7 +94,9 @@ public static class DependencyInjection
             case null or "" or "AlphaVantage":
                 services.AddHttpClient<
                     IMarketDataProvider,
-                    AlphaVantageMarketDataProvider>();
+                    AlphaVantageMarketDataProvider>(
+                    AlphaVantageHttpClientName,
+                    client => client.Timeout = timeouts.AlphaVantage);
                 services.AddSingleton<
                     IMarketCalendar,
                     WeekdayMarketCalendar>();
@@ -84,9 +105,12 @@ public static class DependencyInjection
             case "MarketDataApp":
                 services.AddHttpClient<
                     IMarketDataProvider,
-                    MarketDataAppMarketDataProvider>();
+                    MarketDataAppMarketDataProvider>(
+                    MarketDataAppApi.HttpClientName,
+                    client => client.Timeout = timeouts.MarketDataApp);
                 // Singleton: its cache must outlive each poll. It takes
-                // IHttpClientFactory rather than a long-lived HttpClient.
+                // IHttpClientFactory rather than a long-lived HttpClient, and
+                // creates the same named client, so it gets the same timeout.
                 services.AddSingleton<
                     IMarketCalendar,
                     MarketDataAppMarketCalendar>();
