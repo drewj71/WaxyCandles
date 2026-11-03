@@ -1,6 +1,8 @@
 using WaxyCandles.Infrastructure;
 using WaxyCandles.Infrastructure.Telemetry;
 using WaxyCandles.PricePollingWorker;
+using WaxyCandles.Infrastructure.Health;
+using WaxyCandles.PricePollingWorker.Health;
 
 
 var builder =
@@ -21,6 +23,11 @@ builder.Services
 
 builder.Services
     .AddHostedService<PricePollingWorker>();
+
+// Liveness: a heartbeat file, kept fresh while polls succeed (checked only
+// while the market is open).
+builder.AddWorkerHealth("price-polling-worker")
+    .AddPricePollingCheck(builder.Configuration);
 
 
 var host = builder.Build();

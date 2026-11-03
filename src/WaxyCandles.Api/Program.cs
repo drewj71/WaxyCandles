@@ -8,6 +8,7 @@ using WaxyCandles.Infrastructure.Notifications;
 using WaxyCandles.Infrastructure.Telemetry;
 using OpenTelemetry.Trace;
 using WaxyCandles.Api.RateLimiting;
+using WaxyCandles.Api.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -61,6 +62,9 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddApiRateLimiting(builder.Configuration);
+
+// /health/live and /health/ready (database, RabbitMQ).
+builder.Services.AddApiHealthChecks();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -135,6 +139,7 @@ app.UseAuthorization();
 app.UseRateLimiter();
 
 app.MapControllers();
+app.MapApiHealthChecks();
 app.MapHub<NotificationsHub>(NotificationsHub.Path);
 
 app.Run();

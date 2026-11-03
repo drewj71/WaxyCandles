@@ -112,6 +112,14 @@ services:
     container_name: waxycandles-price-polling-worker
     environment:
       <<: [*database, *messaging, *market-data]
+    healthcheck:
+      # The worker rewrites this file every 15 s while its health checks pass
+      # (Health:Period) and deletes it when one fails; stale or missing = unhealthy.
+      test: ["CMD-SHELL", "f=/tmp/waxycandles-price-polling-worker.healthy; test -f $$f && test $$(( $$(date +%s) - $$(stat -c %Y $$f) )) -lt 60"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   outbox-worker:
     <<: *dotnet-service
@@ -123,6 +131,14 @@ services:
     container_name: waxycandles-outbox-worker
     environment:
       <<: [*database, *messaging]
+    healthcheck:
+      # The worker rewrites this file every 15 s while its health checks pass
+      # (Health:Period) and deletes it when one fails; stale or missing = unhealthy.
+      test: ["CMD-SHELL", "f=/tmp/waxycandles-outbox-worker.healthy; test -f $$f && test $$(( $$(date +%s) - $$(stat -c %Y $$f) )) -lt 60"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   alert-worker:
     <<: *dotnet-service
@@ -134,6 +150,14 @@ services:
     container_name: waxycandles-alert-worker
     environment:
       <<: [*database, *messaging]
+    healthcheck:
+      # The worker rewrites this file every 15 s while its health checks pass
+      # (Health:Period) and deletes it when one fails; stale or missing = unhealthy.
+      test: ["CMD-SHELL", "f=/tmp/waxycandles-alert-worker.healthy; test -f $$f && test $$(( $$(date +%s) - $$(stat -c %Y $$f) )) -lt 60"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   sqlserver-data:
