@@ -310,9 +310,20 @@ namespace WaxyCandles.Infrastructure.Migrations
 
                     b.Property<string>("Type")
                         .IsRequired()
-                        .HasColumnType("nvarchar(max)");
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("IX_OutboxMessages_Pending")
+                        .HasFilter("[ProcessedAt] IS NULL");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("CreatedAt"), new[] { "Type" });
+
+                    b.HasIndex("ProcessedAt")
+                        .HasDatabaseName("IX_OutboxMessages_Processed")
+                        .HasFilter("[ProcessedAt] IS NOT NULL");
 
                     b.ToTable("OutboxMessages");
                 });
@@ -327,6 +338,8 @@ namespace WaxyCandles.Infrastructure.Migrations
                         .HasColumnType("datetimeoffset");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ProcessedAt");
 
                     b.ToTable("ProcessedMessages");
                 });

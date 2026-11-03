@@ -22,6 +22,8 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<StockCandle> StockCandles { get; set; }
     public DbSet<Notification> Notifications => Set<Notification>();
 
+    public const int OutboxMessageTypeMaxLength = 200;
+
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
         base.ConfigureConventions(configurationBuilder);
@@ -93,12 +95,35 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
 
         builder.Entity<OutboxMessage>(entity =>
         {
+            // Bounded so it can be included in the pending index below. Values
+            // are the contracts' MessageType constants (~25 characters).
+            entity.Property(x => x.Type)
+                .HasMaxLength(OutboxMessageTypeMaxLength);
+
+            // The outbox publisher polls every 5s for the oldest pending rows
+            // (and counts pending rows with no route). Filtered to pending rows,
+            // so it stays small however many processed rows the table holds,
+            // and covers both queries with Type included.
+            entity.HasIndex(x => x.CreatedAt)
+                .HasDatabaseName("IX_OutboxMessages_Pending")
+                .HasFilter("[ProcessedAt] IS NULL")
+                .IncludeProperties(x => x.Type);
+
+            // Retention deletes processed rows by age (Retention/DataRetentionService).
+            entity.HasIndex(x => x.ProcessedAt)
+                .HasDatabaseName("IX_OutboxMessages_Processed")
+                .HasFilter("[ProcessedAt] IS NOT NULL");
+
             entity.Property(x => x.TraceParent)
                 .HasMaxLength(MessageTracing.TraceParentMaxLength);
 
             entity.Property(x => x.TraceState)
                 .HasMaxLength(MessageTracing.TraceStateMaxLength);
         });
+
+        // Retention deletes idempotency claims by age.
+        builder.Entity<ProcessedMessage>()
+            .HasIndex(x => x.ProcessedAt);
 
         builder.Entity<RefreshToken>(entity =>
         {
