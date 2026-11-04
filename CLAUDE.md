@@ -30,7 +30,7 @@ For an end-to-end run, RabbitMQ plus the API and all three workers must be runni
 
 EF Core migrations live in `src/WaxyCandles.Infrastructure/Migrations` and are committed to source control.
 
-The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, metrics, retention, health checks, SQL retry and fault injection (`Resilience/`, an EF interceptor that throws a real transient `SqlException`, including after a real commit), rate limiting and startup config, about 560 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. Metric tests use `MetricRecorder` (a `MeterListener`) in the non-parallel `Metrics` collection. A full run takes about 12 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
+The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, metrics, retention, health checks, SQL retry and fault injection (`Resilience/`, an EF interceptor that throws a real transient `SqlException`, including after a real commit), rate limiting, refresh-token reuse and startup config, about 620 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. Metric tests use `MetricRecorder` (a `MeterListener`) in the non-parallel `Metrics` collection. A full run takes about 12 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
 
 ### Frontend (from `web/`)
 
@@ -57,10 +57,10 @@ Required non-secret setting: `Cors:AllowedOrigins` (array) on the API. Startup f
 
 Optional non-secret settings with defaults in code:
 - `RabbitMQ:PrefetchCount`: consumers, default 10. An invalid value logs a warning and uses 10.
-- The OutboxWorker's `Retention:{Interval,InitialDelay,OutboxMessageRetention,ProcessedMessageRetention,StockPriceRetention,BatchSize}`: see Async pipeline.
+- The OutboxWorker's `Retention:{Interval,InitialDelay,OutboxMessageRetention,ProcessedMessageRetention,StockPriceRetention,RefreshTokenRetention,BatchSize}`: see Async pipeline.
 - `Database:MaxRetryCount` (3, 0–10) and `Database:MaxRetryDelay` (5 s, at most 30 s): see Resilience.
 - `MarketDataApp:Timeout` (20 s), `MarketDataApp:OptionsTimeout` (30 s) and `AlphaVantage:Timeout` (20 s), each at most 2 minutes.
-- Workers: `Health:{HeartbeatFile,Period,OutboxLoopMaxAge,PricePolling:MaxPollAge}`: see Health checks.
+- Workers: `Health:{HeartbeatFile,Period,OutboxLoopMaxAge,ConsumerMaxProcessingTime,PricePolling:MaxPollAge}`: see Health checks.
 
 All except `PrefetchCount` are validated at startup (including upper bounds), and a bad value fails startup naming the key.
 
@@ -82,7 +82,12 @@ Projects under `src/` follow a clean/onion architecture:
 - **WaxyCandles.Api** — ASP.NET Core Web API; thin controllers (`Controllers/`) that call into Application services. JWT bearer auth (from an httpOnly cookie), Swagger/OpenAPI in Development only, CORS limited to `Cors:AllowedOrigins`.
   - Rate limiting (built-in limiter, `Api/RateLimiting`, optional `RateLimiting:{MarketData,HistoryImport,Auth}:{PermitLimit,Window}`): fixed windows, no queue, 429 with `Retry-After`. `market-data` (30/min per user) covers GEX and alert create/update, since level alerts resolve a board; `history-import` 5/min per user; `auth` 10/min per client IP on login/register (refresh/logout unlimited). Behind a reverse proxy the IP limit is shared by every client until forwarded headers are configured.
   - Login uses `CheckPasswordSignInAsync` with lockout (5 failures, then 5 minutes). A locked account gets the same 401 as a wrong password.
-  - Refresh tokens are stored only as `RefreshToken.TokenHash`, the SHA-256 of the token's UTF-8 bytes (`TokenService.HashRefreshToken`, `binary(32)`, unique). Look tokens up by hash, and never store or log the plaintext. Refresh rotates the token; replaying a revoked one is a 401.
+  - Refresh tokens are stored only as `RefreshToken.TokenHash`, the SHA-256 of the token's UTF-8 bytes (`TokenService.HashRefreshToken`, `binary(32)`, unique). Look tokens up by hash, and never store or log the plaintext.
+  - **Families:** each login or register starts a `FamilyId`, and refresh rotates within it.
+  - **Concurrent refreshes:** rotation is a conditional `ExecuteUpdate` (`RevokedAt IS NULL`, not expired) inside the execution strategy, so concurrent refreshes have exactly one winner.
+  - **Reuse detection:** a token revoked by rotation and presented again after `AuthService.RotationGracePeriod` (10 s) revokes the whole family (`RevokedReason.ReuseDetected`), logged with user and family id only. Inside the window, a late concurrent refresh just gets a 401 (the web client retries with the new cookie).
+  - **Logout:** it revokes the family's live token. A logged-out token replayed is a plain 401.
+  - **Cleanup:** retention deletes tokens expired (and revoked, if revoked) for `Retention:RefreshTokenRetention` (7 days), so a rotated token is kept for its whole 30-day lifetime and a late replay is still seen as reuse.
 - **WaxyCandles.PricePollingWorker / AlertWorker / OutboxWorker** — standalone background-service executables, each with their own `appsettings*.json`.
 
 Market data access is abstracted behind `IMarketDataProvider` (Application layer) so vendors can be swapped without touching controllers or business logic. The non-secret `MarketData:Provider` setting picks one: `MarketDataApp` (marketdata.app, set in the API and PricePollingWorker appsettings and the default in Docker) or `AlphaVantage` (the fallback when unset). Both providers store daily candles at UTC midnight of the trading date, so candle dedup holds across a switch.
@@ -100,7 +105,7 @@ Metrics use the `WaxyCandles` meter (`WaxyCandlesMetrics`), exported over OTLP u
 - `queue.messages` for each main, retry and dead-letter queue (a dead-letter queue above 0 is the "a message was lost" signal);
 - consumers: `messages.consumed` and `messages.processing.duration`, by queue and outcome (processed, already_processed, skipped, retry_scheduled, dead_lettered_retries_exhausted, dead_lettered_unreadable, requeued);
 - poller: `price_poll.duration`, `prices.stored`, `price_poll.last_success` (also readable from code via `PricePollingHeartbeat`);
-- `alerts.fired` (by kind; can over-count if the AlertWorker's commit fails, so `outbox.published{queue=alert-triggered}` is the committed count);
+- `alerts.fired` (by kind): committed fires only. `IAlertEvaluationService` returns an `AlertEvaluationResult`, and a caller that owns the transaction (the AlertWorker) records it after its commit, outside the replayed delegate. A rare ambiguous commit can under-count, never over-count;
 - `marketdata.requests`, and `marketdata.credits` from Market Data's per-request `X-Api-Ratelimit-Consumed` header, plus `marketdata.credits_remaining`. Daily plans reset at 9:30 ET.
 
 All names are prefixed `waxycandles.`. Rules:
@@ -118,7 +123,11 @@ All names are prefixed `waxycandles.`. Rules:
 - **What makes a worker unhealthy:**
   - Any worker: a background loop has stopped while the host isn't shutting down.
   - PricePollingWorker: no successful poll for `MaxPollAge` (3 × interval, at least 5 min), but only while the market is open, counted from the open at the earliest.
-  - OutboxWorker: its loop hasn't completed an iteration for 2 minutes. That includes a long database outage.
+  - OutboxWorker: no `OutboxLoopHeartbeat` beat for `OutboxLoopMaxAge` (2 min). The loop beats after each successful backlog read, before touching the broker, so a long database outage counts. A broker blocked by a memory or disk alarm also stops the loop.
+  - AlertWorker: one delivery has been inside `ProcessAsync` longer than `ConsumerMaxProcessingTime` (5 min), tracked by `ConsumerProcessingTracker` in `RabbitMqConsumer`.
+    - An idle queue, the ack and the retry/dead-letter publishes never count.
+    - With the default SQL retry settings, one delivery's worst case is about 2.3 minutes. Raise this setting if you raise `Database:MaxRetryCount`/`MaxRetryDelay`; at their maximums the worst case is about 10.5 minutes.
+    - The tracker isn't registered in the API, so there it does nothing.
 - A broker outage does not make any worker unhealthy, since they reconnect on their own.
 
 ### Resilience
@@ -131,7 +140,15 @@ All names are prefixed `waxycandles.`. Rules:
 - **Queue retries.** Short SQL blips are absorbed before a queue retry is used. Longer outages retry and dead-letter as before, with `x-exception-type` `SqlException`.
 - **Vendor HttpClients.** They are named clients with timeouts only: Market Data 20 s (including the market calendar), options 30 s, Alpha Vantage 20 s.
   - Never add retries or a resilience handler: a retried request is billed again, and a 429 usually means the daily credits are spent.
-  - A timeout is `outcome=timeout` on `marketdata.requests`. In the API it is still a 500.
+  - A timeout is `outcome=timeout` on `marketdata.requests`. A vendor 429 is still `outcome=error`.
+- **Vendor errors.** Providers throw `MarketDataUnavailableException` (Application; `Timeout` or `RateLimited`, optional `RetryAfter`) at the HTTP boundary. Alpha Vantage limit notes in a 200 body count as rate limited.
+  - `ExceptionHandlingMiddleware` maps these errors:
+    - a vendor timeout to 504;
+    - a vendor limit to 503, with `Retry-After` when known;
+    - a client disconnect to 499 (checked first, never reported as a 504).
+  - All of these use fixed messages and never include the vendor's URL or body.
+  - The API's own 429 is separate and unchanged. CORS exposes `Retry-After` so the web app can show the wait.
+  - In the web app, queries never retry a 4xx, 503 or 504, and mutations never retry.
 
 ### GEX level alerts
 
@@ -167,10 +184,11 @@ Price Polling Worker -> writes StockPrice + OutboxMessage (same DB transaction)
 - The OutboxWorker also runs `DataRetentionWorker` (Infrastructure/Retention): 1 minute after start, then every `Retention:Interval` (1h). It deletes, in paused `DELETE TOP (BatchSize)` batches (default 1000):
   - processed outbox rows older than 7 days (pending rows never);
   - `ProcessedMessages` claims older than 7 days;
-  - `StockPrices` older than 30 days, except each symbol's latest price, which every reader relies on.
+  - `StockPrices` older than 30 days, except each symbol's latest price, which every reader relies on;
+  - `RefreshTokens` expired (and revoked, if revoked) for more than 7 days.
 
   Each table fails independently and is retried the next pass. The `ProcessedMessages` window must stay far longer than any redelivery path, and a future dead-letter replay tool must stay inside it. The publisher's pending query uses the filtered `IX_OutboxMessages_Pending`, and `OutboxMessage.Type` is `nvarchar(200)`. Building these indexes on a large outbox table blocks the publisher and poller while it runs, so apply that migration when the market is closed.
-- Idempotency: `StockPriceConsumer` claims a `ProcessedMessage` row inside the transaction that evaluates alerts, and `AlertEvaluationService` fires and re-arms alerts only through conditional updates that re-check, at write time, that the alert is unchanged since it was read (target/direction/frequency), still in the expected state, and that the price's observation time (`StockPriceUpdatedMessage.Timestamp`) is newer than the alert's `StateChangedAt` — so concurrent or out-of-order evaluations emit one event per fire, and an edit (which re-arms and stamps `StateChangedAt`) can't be overridden by a stale price; `AlertTriggeredConsumer` relies on the unique `Notification.SourceMessageId`, and its SignalR push has a 5s timeout because it runs before the ack. Check this when touching any consumer logic.
+- Idempotency: `StockPriceConsumer` claims a `ProcessedMessage` row inside the transaction that evaluates alerts, and `AlertEvaluationService` fires and re-arms alerts only through conditional updates that re-check, at write time, that the alert is unchanged since it was read (target/direction/frequency), still in the expected state, and that the price's observation time (`StockPriceUpdatedMessage.Timestamp`) is newer than the alert's `StateChangedAt` — so concurrent or out-of-order evaluations emit one event per fire, and an edit (which re-arms and stamps `StateChangedAt`) can't be overridden by a stale price. Create and condition-changing edits stamp `StateChangedAt` with the newest stored price time for the symbol, on the provider's clock. If the symbol has no stored price, create leaves it null and an edit uses now. The stamp never moves back. So a price observed before the alert was created or edited can't fire it, and a delayed feed isn't muted; `AlertTriggeredConsumer` relies on the unique `Notification.SourceMessageId`, and its SignalR push has a 5s timeout because it runs before the ack. Check this when touching any consumer logic.
 - The SignalR push (`/hubs/notifications`, cookie-authenticated) only reaches clients on the API instance that consumed the message; more than one API instance would need a SignalR backplane.
 
 ### Frontend: TanStack Router/Query, mid-migration
