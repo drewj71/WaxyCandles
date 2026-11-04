@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Web;
 using Microsoft.Extensions.Configuration;
+using WaxyCandles.Application.MarketData.Exceptions;
 using WaxyCandles.Domain.Enums;
 using WaxyCandles.Infrastructure.MarketData.Providers;
 
@@ -188,7 +189,6 @@ public class MarketDataAppMarketDataProviderTests
     [InlineData(HttpStatusCode.Unauthorized)]
     [InlineData(HttpStatusCode.PaymentRequired)]
     [InlineData(HttpStatusCode.Forbidden)]
-    [InlineData(HttpStatusCode.TooManyRequests)]
     public async Task Http_error_throws_with_market_datas_message(HttpStatusCode status)
     {
         _handler.RespondWith("""{ "s": "error", "errmsg": "Something went wrong." }""", status);
@@ -197,6 +197,47 @@ public class MarketDataAppMarketDataProviderTests
             () => Provider().GetCurrentQuoteAsync("AAPL"));
 
         Assert.Equal($"Market Data error ({(int)status}): Something went wrong.", ex.Message);
+    }
+
+    [Fact]
+    public async Task Http_429_is_rate_limited_with_the_vendors_retry_after()
+    {
+        _handler.RespondWith("""{ "s": "error", "errmsg": "Daily request limit exceeded." }""", HttpStatusCode.TooManyRequests);
+        _handler.Headers["Retry-After"] = "90";
+
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
+            () => Provider().GetCurrentQuoteAsync("AAPL"));
+
+        Assert.Equal(MarketDataUnavailableReason.RateLimited, ex.Reason);
+        Assert.Equal(TimeSpan.FromSeconds(90), ex.RetryAfter);
+        // The vendor's body isn't carried into the message.
+        Assert.DoesNotContain("Daily request limit", ex.Message);
+        Assert.Single(_handler.Requests);
+    }
+
+    [Fact]
+    public async Task Http_429_without_retry_after_uses_the_rate_limit_reset_header()
+    {
+        _handler.RespondWith("{}", HttpStatusCode.TooManyRequests);
+        _handler.Headers["X-Api-Ratelimit-Reset"] =
+            DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds().ToString();
+
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
+            () => Provider().GetCurrentQuoteAsync("AAPL"));
+
+        Assert.NotNull(ex.RetryAfter);
+        Assert.InRange(ex.RetryAfter!.Value, TimeSpan.FromMinutes(9), TimeSpan.FromMinutes(10.1));
+    }
+
+    [Fact]
+    public async Task Http_429_without_any_hint_has_no_retry_after()
+    {
+        _handler.RespondWith("{}", HttpStatusCode.TooManyRequests);
+
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
+            () => Provider().GetCurrentQuoteAsync("AAPL"));
+
+        Assert.Null(ex.RetryAfter);
     }
 
     [Fact]
@@ -362,6 +403,9 @@ public class MarketDataAppMarketDataProviderTests
 
         public List<SentRequest> Requests { get; } = [];
 
+        /// <summary>Response headers to add, e.g. Retry-After.</summary>
+        public Dictionary<string, string> Headers { get; } = [];
+
         public void RespondWith(string body, HttpStatusCode status = HttpStatusCode.OK)
         {
             _body = body;
@@ -376,10 +420,17 @@ public class MarketDataAppMarketDataProviderTests
                 request.RequestUri!,
                 request.Headers.Authorization?.ToString()));
 
-            return Task.FromResult(new HttpResponseMessage(_status)
+            var response = new HttpResponseMessage(_status)
             {
                 Content = new StringContent(_body, Encoding.UTF8, "application/json")
-            });
+            };
+
+            foreach (var (name, value) in Headers)
+            {
+                response.Headers.TryAddWithoutValidation(name, value);
+            }
+
+            return Task.FromResult(response);
         }
     }
 }

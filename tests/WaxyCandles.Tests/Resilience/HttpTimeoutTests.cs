@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using WaxyCandles.Application.MarketData.Exceptions;
 using WaxyCandles.Application.MarketData.Interfaces;
 using WaxyCandles.Application.Options.Interfaces;
 using WaxyCandles.Application.Options.Models;
@@ -85,10 +86,11 @@ public sealed class HttpTimeoutTests : IDisposable
 
         var provider = services.GetRequiredService<IMarketDataProvider>();
 
-        var ex = await Assert.ThrowsAsync<TaskCanceledException>(
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
             () => provider.GetCurrentQuotesAsync(["AAPL"]));
 
-        Assert.IsType<TimeoutException>(ex.InnerException);
+        Assert.Equal(MarketDataUnavailableReason.Timeout, ex.Reason);
+        Assert.IsType<TimeoutException>(Assert.IsType<TaskCanceledException>(ex.InnerException).InnerException);
         Assert.Equal(1, handler.Calls);
         Assert.Equal(1, _metrics.Sum(
             "waxycandles.marketdata.requests",
@@ -107,7 +109,7 @@ public sealed class HttpTimeoutTests : IDisposable
 
         var provider = services.GetRequiredService<IOptionsDataProvider>();
 
-        var ex = await Assert.ThrowsAsync<TaskCanceledException>(
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
             () => provider.GetOptionChainAsync(new OptionChainQuery(
                 "AAPL",
                 DateOnly.FromDateTime(DateTime.UtcNow),
@@ -115,7 +117,7 @@ public sealed class HttpTimeoutTests : IDisposable
                 240m,
                 260m)));
 
-        Assert.IsType<TimeoutException>(ex.InnerException);
+        Assert.Equal(MarketDataUnavailableReason.Timeout, ex.Reason);
         Assert.Equal(1, handler.Calls);
     }
 
@@ -128,8 +130,10 @@ public sealed class HttpTimeoutTests : IDisposable
             new() { ["MarketData:Provider"] = "MarketDataApp" },
             s => s.AddHttpClient(MarketDataClient).ConfigurePrimaryHttpMessageHandler(() => handler));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
             () => services.GetRequiredService<IMarketDataProvider>().GetCurrentQuotesAsync(["AAPL"]));
+
+        Assert.Equal(MarketDataUnavailableReason.RateLimited, ex.Reason);
 
         Assert.Equal(1, handler.Calls);
     }
