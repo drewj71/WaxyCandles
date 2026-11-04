@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,7 +58,7 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
         // Nothing in the row, read as raw SQL, holds the token handed to the client.
         var rawColumns = await db.Database
             .SqlQueryRaw<string>(
-                "SELECT CONCAT_WS('|', [Id], [UserId], [ReplacedByToken], " +
+                "SELECT CONCAT_WS('|', [Id], [UserId], [FamilyId], " +
                 "CONVERT(varchar(64), [TokenHash], 2)) AS [Value] FROM [RefreshTokens]")
             .SingleAsync();
         Assert.DoesNotContain(response.RefreshToken, rawColumns);
@@ -104,21 +104,6 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
             () => RefreshAsync(registered.RefreshToken));
 
         Assert.Equal("Refresh token expired or revoked.", ex.Message);
-    }
-
-    [Fact]
-    public async Task Reusing_a_rotated_token_does_not_revoke_its_replacement()
-    {
-        // Current behavior: a replayed rotated token is rejected, but the
-        // session it was rotated into stays usable (no family revocation).
-        var registered = await RegisterAsync("alice@example.com");
-        var refreshed = await RefreshAsync(registered.RefreshToken);
-
-        await Assert.ThrowsAsync<InvalidRefreshTokenException>(
-            () => RefreshAsync(registered.RefreshToken));
-
-        Assert.True((await LoadTokenAsync(refreshed.RefreshToken)).IsActive);
-        await RefreshAsync(refreshed.RefreshToken);
     }
 
     [Fact]

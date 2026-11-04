@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -12,7 +12,8 @@ namespace WaxyCandles.Tests.Retention;
 
 /// <summary>
 /// DataRetentionWorker against real SQL Server, with a fixed clock for cutoffs.
-/// Defaults: processed outbox rows and idempotency claims 7 days, prices 30 days.
+/// Defaults: processed outbox rows and idempotency claims 7 days, prices 30 days,
+/// refresh tokens 7 days past expiry and revocation.
 /// </summary>
 public class RetentionTests(IntegrationFixture fixture)
     : DatabaseTestBase(fixture)
@@ -100,11 +101,44 @@ public class RetentionTests(IntegrationFixture fixture)
             (await db.StockPrices.Select(x => x.Id).ToListAsync()).Order());
     }
 
+    [Fact]
+    public async Task Only_refresh_tokens_past_retention_after_both_expiry_and_revocation_are_deleted()
+    {
+        var userId = await SeedUserAsync();
+
+        var active = Token(userId, expiresAt: Now.AddDays(20), revokedAt: null);
+        var expiredLongAgo = Token(userId, expiresAt: Now.AddDays(-8), revokedAt: null);
+        var expiredRecently = Token(userId, expiresAt: Now.AddDays(-6), revokedAt: null);
+        var revokedAndExpiredLongAgo = Token(userId, expiresAt: Now.AddDays(-8), revokedAt: Now.AddDays(-20));
+
+        // Rotated weeks ago but not yet expired: kept so a replay is still
+        // recognised as reuse and revokes its family.
+        var rotatedLongAgoStillUnexpired = Token(
+            userId, expiresAt: Now.AddDays(5), revokedAt: Now.AddDays(-25), RefreshTokenRevocationReason.Rotated);
+
+        // Expired long ago but revoked recently (logout after expiry).
+        var revokedRecently = Token(userId, expiresAt: Now.AddDays(-10), revokedAt: Now.AddDays(-3));
+
+        await SeedAsync(db => db.RefreshTokens.AddRange(
+            active, expiredLongAgo, expiredRecently, revokedAndExpiredLongAgo, rotatedLongAgoStillUnexpired, revokedRecently));
+
+        var result = await Worker().RunPassAsync(CancellationToken.None);
+
+        Assert.Equal(2, result.RefreshTokens);
+
+        await using var db = NewDbContext();
+        Assert.Equal(
+            new[] { active.Id, expiredRecently.Id, rotatedLongAgoStillUnexpired.Id, revokedRecently.Id }.Order(),
+            (await db.RefreshTokens.Select(x => x.Id).ToListAsync()).Order());
+    }
+
     [Theory]
     [InlineData(25)] // batches of 10, 10, 5
     [InlineData(20)] // batches of 10, 10, 0
     public async Task More_eligible_rows_than_one_batch_are_all_deleted(int count)
     {
+        var userId = await SeedUserAsync();
+
         await SeedAsync(db =>
         {
             for (var i = 0; i < count; i++)
@@ -112,7 +146,10 @@ public class RetentionTests(IntegrationFixture fixture)
                 db.OutboxMessages.Add(Outbox(Now.AddDays(-10), Now.AddDays(-9).AddSeconds(i)));
                 db.ProcessedMessages.Add(new ProcessedMessage { Id = Guid.NewGuid(), ProcessedAt = Now.AddDays(-9).AddSeconds(i) });
                 db.StockPrices.Add(Price("AAPL", Now.AddDays(-40).AddSeconds(i)));
+                db.RefreshTokens.Add(Token(userId, Now.AddDays(-9).AddSeconds(i), revokedAt: null));
             }
+
+            db.RefreshTokens.Add(Token(userId, Now.AddDays(1), revokedAt: null));
 
             db.OutboxMessages.Add(Outbox(Now.AddDays(-10), processedAt: null));
             db.StockPrices.Add(Price("AAPL", Now.AddMinutes(-1)));
@@ -120,12 +157,13 @@ public class RetentionTests(IntegrationFixture fixture)
 
         var result = await Worker(batchSize: 10).RunPassAsync(CancellationToken.None);
 
-        Assert.Equal(new RetentionPassResult(count, count, count), result);
+        Assert.Equal(new RetentionPassResult(count, count, count, count), result);
 
         await using var db = NewDbContext();
         Assert.Equal(1, await db.OutboxMessages.CountAsync());
         Assert.Equal(0, await db.ProcessedMessages.CountAsync());
         Assert.Equal(1, await db.StockPrices.CountAsync());
+        Assert.Equal(1, await db.RefreshTokens.CountAsync());
     }
 
     [Fact]
@@ -142,8 +180,8 @@ public class RetentionTests(IntegrationFixture fixture)
 
         var worker = Worker();
 
-        Assert.Equal(new RetentionPassResult(1, 1, 1), await worker.RunPassAsync(CancellationToken.None));
-        Assert.Equal(new RetentionPassResult(0, 0, 0), await worker.RunPassAsync(CancellationToken.None));
+        Assert.Equal(new RetentionPassResult(1, 1, 1, 0), await worker.RunPassAsync(CancellationToken.None));
+        Assert.Equal(new RetentionPassResult(0, 0, 0, 0), await worker.RunPassAsync(CancellationToken.None));
 
         await using var db = NewDbContext();
         Assert.Equal(1, await db.OutboxMessages.CountAsync());
@@ -211,6 +249,8 @@ public class RetentionTests(IntegrationFixture fixture)
     [InlineData("Retention:ProcessedMessageRetention", "3651.00:00:00")]
     [InlineData("Retention:StockPriceRetention", "-1.00:00:00")]
     [InlineData("Retention:StockPriceRetention", "100000.00:00:00")]
+    [InlineData("Retention:RefreshTokenRetention", "00:00:00")]
+    [InlineData("Retention:RefreshTokenRetention", "3651.00:00:00")]
     [InlineData("Retention:BatchSize", "0")]
     [InlineData("Retention:BatchSize", "4001")]
     public void Invalid_options_fail_validation(string key, string value)
@@ -242,6 +282,7 @@ public class RetentionTests(IntegrationFixture fixture)
         Assert.Equal(TimeSpan.FromDays(7), options.OutboxMessageRetention);
         Assert.Equal(TimeSpan.FromDays(7), options.ProcessedMessageRetention);
         Assert.Equal(TimeSpan.FromDays(30), options.StockPriceRetention);
+        Assert.Equal(TimeSpan.FromDays(7), options.RefreshTokenRetention);
         Assert.Equal(1000, options.BatchSize);
     }
 
@@ -294,6 +335,22 @@ public class RetentionTests(IntegrationFixture fixture)
         Payload = "{}",
         CreatedAt = createdAt,
         ProcessedAt = processedAt
+    };
+
+    private static RefreshToken Token(
+        string userId,
+        DateTimeOffset expiresAt,
+        DateTimeOffset? revokedAt,
+        RefreshTokenRevocationReason? reason = null) => new()
+    {
+        Id = Guid.NewGuid(),
+        TokenHash = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32),
+        UserId = userId,
+        FamilyId = Guid.NewGuid(),
+        CreatedAt = expiresAt.AddDays(-30),
+        ExpiresAt = expiresAt,
+        RevokedAt = revokedAt,
+        RevokedReason = revokedAt is null ? null : reason ?? RefreshTokenRevocationReason.Logout
     };
 
     private static StockPrice Price(string symbol, DateTimeOffset timestamp) => new()

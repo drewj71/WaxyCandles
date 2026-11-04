@@ -140,6 +140,12 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
 
             entity.HasIndex(x => x.UserId);
 
+            // Family revocation and logout update by family.
+            entity.HasIndex(x => x.FamilyId);
+
+            // Retention deletes by expiry.
+            entity.HasIndex(x => x.ExpiresAt);
+
             entity.Property(x => x.UserId)
                 .IsRequired();
 

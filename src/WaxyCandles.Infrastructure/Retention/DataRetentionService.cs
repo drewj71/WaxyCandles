@@ -86,6 +86,29 @@ public class DataRetentionService
             batchSize,
             cancellationToken);
 
+    /// <summary>
+    /// Refresh tokens whose expiry, and revocation if any, are both before
+    /// <paramref name="cutoff"/>. Revocation alone never makes a row eligible:
+    /// a rotated token is kept until after it expires, so replaying it (reuse
+    /// detection, which revokes its family) keeps working for its whole
+    /// lifetime instead of turning into an unknown token.
+    /// </summary>
+    public Task<int> DeleteOldRefreshTokensAsync(
+        DateTimeOffset cutoff,
+        int batchSize,
+        CancellationToken cancellationToken = default) =>
+        DeleteInBatchesAsync(
+            // Seeks IX_RefreshTokens_ExpiresAt.
+            () => _dbContext.Database.ExecuteSqlAsync(
+                $"""
+                DELETE TOP ({batchSize}) FROM [RefreshTokens]
+                WHERE [ExpiresAt] < {cutoff}
+                  AND ([RevokedAt] IS NULL OR [RevokedAt] < {cutoff})
+                """,
+                cancellationToken),
+            batchSize,
+            cancellationToken);
+
     private static async Task<int> DeleteInBatchesAsync(
         Func<Task<int>> deleteBatch,
         int batchSize,

@@ -39,6 +39,9 @@ public static class RetentionServiceCollectionExtensions
                 x => IsValidRetention(x.StockPriceRetention),
                 RetentionMessage("StockPriceRetention"))
             .Validate(
+                x => IsValidRetention(x.RefreshTokenRetention),
+                RetentionMessage("RefreshTokenRetention"))
+            .Validate(
                 x => x.BatchSize is > 0 and <= RetentionOptions.MaxBatchSize,
                 $"Retention:BatchSize must be between 1 and {RetentionOptions.MaxBatchSize}.")
             .ValidateOnStart();

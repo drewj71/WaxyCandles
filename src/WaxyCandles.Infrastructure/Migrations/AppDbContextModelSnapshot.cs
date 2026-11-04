@@ -356,11 +356,14 @@ namespace WaxyCandles.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.Property<string>("ReplacedByToken")
-                        .HasColumnType("nvarchar(max)");
+                    b.Property<Guid>("FamilyId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTimeOffset?>("RevokedAt")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<int?>("RevokedReason")
+                        .HasColumnType("int");
 
                     b.Property<byte[]>("TokenHash")
                         .IsRequired()
@@ -373,6 +376,10 @@ namespace WaxyCandles.Infrastructure.Migrations
                         .HasColumnType("nvarchar(450)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("FamilyId");
 
                     b.HasIndex("TokenHash")
                         .IsUnique();
