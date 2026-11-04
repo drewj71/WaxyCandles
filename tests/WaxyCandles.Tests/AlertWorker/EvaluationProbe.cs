@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using WaxyCandles.Application.Alerts.DTOs;
 using WaxyCandles.Application.Alerts.Interfaces;
 
 namespace WaxyCandles.Tests.AlertWorker;
@@ -45,14 +46,15 @@ public sealed class ProbingAlertEvaluationService(
     IAlertEvaluationService inner,
     EvaluationProbe probe) : IAlertEvaluationService
 {
-    public async Task EvaluateAsync(
+    public async Task<AlertEvaluationResult> EvaluateAsync(
         string symbol,
         decimal price,
         DateTimeOffset? observedAt = null,
         CancellationToken cancellationToken = default)
     {
         await probe.OnEvaluateAsync(symbol);
-        await inner.EvaluateAsync(symbol, price, observedAt, cancellationToken);
+        var result = await inner.EvaluateAsync(symbol, price, observedAt, cancellationToken);
         await probe.OnEvaluatedAsync();
+        return result;
     }
 }

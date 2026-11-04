@@ -12,8 +12,10 @@ builder.Services.AddInfrastructure(
 
 builder.Services.AddHostedService<StockPriceConsumer>();
 
-// Liveness: a heartbeat file, kept fresh while the consumer loop runs.
-builder.AddWorkerHealth("alert-worker");
+// Liveness: a heartbeat file, kept fresh while the consumer loop runs and no
+// delivery has been processing for longer than Health:ConsumerMaxProcessingTime.
+builder.AddWorkerHealth("alert-worker")
+    .AddConsumerStallCheck();
 
 var host = builder.Build();
 

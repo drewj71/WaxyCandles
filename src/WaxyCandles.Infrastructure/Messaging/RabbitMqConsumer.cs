@@ -50,6 +50,9 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
     private readonly IServiceProvider _services;
     private readonly ILogger _logger;
 
+    // Stall detection; null where it isn't registered (the API).
+    private readonly ConsumerProcessingTracker? _tracker;
+
     protected RabbitMqConsumer(
         QueueTopology topology,
         IServiceProvider services,
@@ -58,6 +61,7 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         _topology = topology;
         _services = services;
         _logger = logger;
+        _tracker = services.GetService<ConsumerProcessingTracker>();
     }
 
     /// <summary>Used in log messages, e.g. "stock price".</summary>
@@ -360,10 +364,18 @@ public abstract class RabbitMqConsumer<TMessage> : BackgroundService
         {
             using var scope = _services.CreateScope();
 
-            var outcome = await ProcessAsync(
-                message,
-                scope.ServiceProvider,
-                stoppingToken);
+            ConsumeOutcome outcome;
+
+            // Only the processing is tracked for stall detection. The ack and
+            // the retry/dead-letter publishes wait on the broker, and a broker
+            // outage must not look like a stuck consumer.
+            using (_tracker?.Begin(_topology.Queue))
+            {
+                outcome = await ProcessAsync(
+                    message,
+                    scope.ServiceProvider,
+                    stoppingToken);
+            }
 
             await channel.BasicAckAsync(
                 eventArgs.DeliveryTag,

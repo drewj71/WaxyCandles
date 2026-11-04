@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using WaxyCandles.Application.Alerts.DTOs;
 
 namespace WaxyCandles.Infrastructure.Telemetry;
 
@@ -80,7 +81,32 @@ public static class WaxyCandlesMetrics
     public static readonly Counter<long> AlertsFired = Meter.CreateCounter<long>(
         "waxycandles.alerts.fired",
         unit: "{alert}",
-        description: "Alert fire events written, by kind (price/level).");
+        description: "Alert fire events committed, by kind (price/level).");
+
+    /// <summary>
+    /// Counts the fires of a committed evaluation. Call it only after the
+    /// commit, once per committed attempt. Never throws: it runs after the
+    /// commit, where an exception would retry a message that has already
+    /// been processed.
+    /// </summary>
+    public static void RecordAlertsFired(AlertEvaluationResult result)
+    {
+        try
+        {
+            foreach (var fired in result.Fired)
+            {
+                AlertsFired.Add(
+                    1,
+                    new KeyValuePair<string, object?>(
+                        KindTag,
+                        fired.Level is null ? "price" : "level"));
+            }
+        }
+        catch (Exception)
+        {
+            // Metrics must never change message handling.
+        }
+    }
 
     // ---- Market Data (API, PricePollingWorker) ----
 

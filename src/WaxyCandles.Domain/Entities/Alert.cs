@@ -48,9 +48,14 @@ public class Alert
 
     /// <summary>
     /// When the alert's state last changed: the observation time of the price
-    /// that fired or re-armed it, or the time an edit re-armed it. A price
-    /// observed before this can't change the state again, so prices evaluated
-    /// out of order can't re-arm or fire it twice for one crossing.
+    /// that fired or re-armed it, or, when it was created, edited or had its
+    /// level target refreshed, the newest stored price time for its symbol (the
+    /// provider's clock, like the prices it is compared with). A price observed
+    /// at or before this can't change the state again, so prices evaluated out
+    /// of order can't re-arm or fire it twice for one crossing, and a price
+    /// observed before the alert existed can't fire it. Null means no boundary:
+    /// created before any price was stored for its symbol (or before this was
+    /// stamped on create).
     /// </summary>
     public DateTimeOffset? StateChangedAt { get; set; }
 
