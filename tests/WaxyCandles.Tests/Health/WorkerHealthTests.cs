@@ -86,20 +86,21 @@ public class WorkerHealthTests : IDisposable
     }
 
     [Fact]
-    public async Task Loop_progress_is_unhealthy_only_after_the_marker_stops_changing()
+    public async Task Loop_heartbeat_is_unhealthy_only_after_the_beats_stop()
     {
         var time = new MutableTime(DateTimeOffset.Parse("2026-09-02T16:00:00Z"));
-        object? marker = null;
+        var heartbeat = new OutboxLoopHeartbeat(time);
 
-        var check = new LoopProgressHealthCheck("test", () => marker, TimeSpan.FromMinutes(2), time);
+        var check = new LoopHeartbeatHealthCheck("test", heartbeat, TimeSpan.FromMinutes(2), time);
 
         // Start-up allowance before the loop's first iteration.
         time.Now += TimeSpan.FromSeconds(90);
         Assert.Equal(HealthStatus.Healthy, (await RunAsync(check)).Status);
 
-        // An iteration (a new object, even with the same values) resets the clock.
+        // An iteration resets the clock.
         time.Now += TimeSpan.FromSeconds(60);
-        marker = new object();
+        heartbeat.Beat();
+        Assert.Equal(time.Now, heartbeat.LastBeatAt);
         Assert.Equal(HealthStatus.Healthy, (await RunAsync(check)).Status);
 
         time.Now += TimeSpan.FromSeconds(110);

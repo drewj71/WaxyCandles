@@ -21,37 +21,34 @@ Update this at the end of each working session.
 - [ ] **Deploy Phase 2**: migration `HashRefreshTokens` (hashes existing tokens in place, so nobody
   logs in again; rolling it back deletes all refresh tokens). Check the worker containers report
   healthy in `docker compose ps`.
-- [ ] **Phase 2 follow-ups**:
-  - Map a vendor timeout to 504 and a vendor 429 to 503 in `ExceptionHandlingMiddleware` (both are
-    a 500 today).
+- [ ] **Deploy the hardening batch**: migration `RefreshTokenFamilies` (quick; two indexes on
+  `RefreshTokens`). Reuse detection covers only rotations after it.
+- [ ] **Phase 2 and hardening follow-ups**:
   - An API container health check (the aspnet image has no curl) or an orchestrator HTTP probe.
-  - Explicit heartbeat calls in `OutboxPublisherWorker` and `RabbitMqConsumer`, instead of the
-    outbox check reading the backlog metric; would give the AlertWorker real stall detection.
   - Share the RabbitMQ connection-factory settings between `RabbitMqConnection` and the broker
     health check.
-  - Refresh-token reuse detection (revoke the chain on a replayed revoked token); drop or hash
-    `ReplacedByToken`; delete expired and revoked tokens in the retention worker; two concurrent
-    refreshes with one token can both succeed.
-  - Ambiguous-commit replays still give a 500 for watchlist remove and for `AuthService`/Identity
-    writes (rare).
-  - `marketdata.credits` misses timed-out requests.
+  - Ambiguous-commit replays still give a 500 for watchlist remove and for Identity writes (rare).
+  - `marketdata.credits` misses timed-out requests; a vendor 429 is `outcome=error` (add
+    `rate_limited`).
+  - Refresh sessions have no maximum age (each rotation slides expiry 30 days); a reuse-detected
+    metric; the grace window and lifetime are code constants.
+  - `GexLevelAlertRefresher` falls back to the wall clock for a symbol with no stored price, which
+    can mute a delayed feed's first quotes (create now leaves the stamp null instead).
+  - A poll committing between the stamp read and an alert's save still counts as after the alert.
+  - Compose only marks a stalled container unhealthy; restarting it needs autoheal or an orchestrator.
+  - Alpha Vantage rate-limit detection follows its docs and is untested against the real API.
 - [ ] **Phase 1 follow-ups**:
   - Retention metrics (rows deleted per table) now that the Meter exists.
   - An index on `StockPrices.Timestamp` if the retention delete shows up as slow.
   - Make `Prefetch_limit_lets_a_second_consumer_share_a_backlog` deterministic: it depends on
     timing and could flake on a slow CI agent.
-  - Record `alerts.fired` after the AlertWorker's commit (it can over-count today, including on an
-    execution-strategy replay; needs an `IAlertEvaluationService` return-type change).
   - Any future dead-letter replay tool must stay inside the `ProcessedMessages` window (7 days).
-  - Existing gap, not from Phase 1: creating an alert doesn't set `StateChangedAt`, so a price
-    delayed in the pipeline that was observed before the alert existed can still fire it.
 - [ ] **Decisions needed from Phase 0**:
   - `POST /api/stocks/{symbol}/historical` isn't called by the web app: keep it (now 5/min per user),
     make it admin-only, or remove it?
   - Forwarded headers and a trusted-proxy list before deploying behind a proxy, or the per-IP auth
     limit is shared by every client.
 - [ ] **Phase 0 follow-ups**:
-  - The web app has no 429 handling (it shows the generic error).
   - `RabbitMqConnection` connects synchronously and ignores cancellation; an async, cancellable
     connect would fix slow shutdown when the broker host doesn't answer.
 - [ ] **IV analytics on the GEX page**: ATM IV term structure and skew per expiration, from the
@@ -70,6 +67,27 @@ Update this at the end of each working session.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
 
 ## Log
+
+### 2026-11-04 (hardening batch)
+- Follow-ups from Phases 0–2, three parallel agents, combined on `integration/hardening`.
+- `fix/alert-stamp-fired-heartbeats` (plan approved first; touches the AlertWorker consumer):
+  - Alert create stamps `StateChangedAt` with the newest stored price time (provider clock), so a
+    price observed before the alert existed can't fire it. Edits use the same stamp, which also
+    stops a delayed feed muting an edited alert.
+  - `alerts.fired` counts committed fires only, recorded after the AlertWorker's commit.
+  - Explicit `OutboxLoopHeartbeat`; AlertWorker stall detection (a delivery in `ProcessAsync` over
+    5 min). No change to ack, retry or dead-letter behaviour.
+- `feat/vendor-error-mapping`: vendor timeout → 504, vendor rate limit → 503 with `Retry-After`,
+  client disconnect → 499, through a typed `MarketDataUnavailableException`. The web app shows
+  429/503/504 messages (login used to say "Invalid email or password" on a 429) and never retries
+  them.
+- `feat/refresh-token-families`: token families with reuse detection (a replayed rotated token
+  after a 10 s grace window revokes the family), one winner for concurrent refreshes, logout ends
+  the session, `ReplacedByToken` dropped, and expired tokens deleted by the retention worker.
+  Migration `RefreshTokenFamilies`.
+- Combined: no overlapping files; full suite 624 passed, 0 failed (11 m 51 s); web build and lint
+  pass. Example appsettings add `Retention:RefreshTokenRetention` and
+  `Health:ConsumerMaxProcessingTime`.
 
 ### 2026-11-03 (Phase 2)
 - Roadmap Phase 2, three parallel agents in separate worktrees, combined on `integration/phase2`.

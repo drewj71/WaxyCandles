@@ -55,6 +55,13 @@ public class AlertService : IAlertService
             await ResolveLevelAsync(alert, now, required: true);
         }
 
+        // Prices observed before the alert existed may still be in the
+        // pipeline (outbox, queue, retries) and must not fire it. Read last,
+        // just before the insert. Null when the symbol has no stored price:
+        // nothing for it can be in the pipeline then, and the wall clock would
+        // mute a delayed feed's first quotes.
+        alert.StateChangedAt = await LatestPriceTimeAsync(alert.Symbol);
+
         _dbContext.Alerts.Add(alert);
 
         // The level lookup (an HTTP call) is above, so a retried save never
@@ -186,14 +193,36 @@ public class AlertService : IAlertService
             _dbContext.Entry(alert).Property(a => a.IsTriggered).IsModified = true;
 
             // Prices observed before this edit belong to the old condition and
-            // must not fire or re-arm the edited alert.
-            alert.StateChangedAt = now;
+            // must not fire or re-arm the edited alert. Provider clock, like
+            // the prices it is compared with; the wall clock only when the
+            // symbol has no stored price. Never moved back: a later state
+            // change already rules out everything before it.
+            var boundary = await LatestPriceTimeAsync(alert.Symbol) ?? now;
+
+            if (alert.StateChangedAt is null || alert.StateChangedAt < boundary)
+            {
+                alert.StateChangedAt = boundary;
+            }
         }
 
         await _dbContext.SaveChangesAsync();
 
         return AlertResponse.From(alert, now);
     }
+
+    /// <summary>
+    /// The newest stored price time for the symbol, or null if it has none.
+    /// Evaluation compares a state change with price observation times, which
+    /// are the provider's quote times. The poller stores a price and its outbox
+    /// row together, so every price already in the pipeline is at or before
+    /// this time and every later poll is after it, even when quotes lag the
+    /// wall clock (a delayed feed). Retention always keeps each symbol's
+    /// latest price.
+    /// </summary>
+    private Task<DateTimeOffset?> LatestPriceTimeAsync(string symbol) =>
+        _dbContext.StockPrices
+            .Where(p => p.Symbol == symbol)
+            .MaxAsync(p => (DateTimeOffset?)p.Timestamp);
 
     /// <summary>
     /// Sets a level alert's target and direction from where its level is now.

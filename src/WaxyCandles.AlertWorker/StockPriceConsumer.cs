@@ -1,9 +1,11 @@
 using WaxyCandles.Application.MarketData.Messages;
+using WaxyCandles.Application.Alerts.DTOs;
 using WaxyCandles.Application.Alerts.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using WaxyCandles.Infrastructure.Persistence;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Infrastructure.Messaging;
+using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.AlertWorker;
 
@@ -62,9 +64,17 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
         // dead-letter, as before.
         var strategy = dbContext.Database.CreateExecutionStrategy();
 
-        return await strategy.ExecuteAsync(
+        var (outcome, evaluation) = await strategy.ExecuteAsync(
             ct => ProcessOnceAsync(message, dbContext, alertEvaluationService, ct),
             cancellationToken);
+
+        // Only the attempt that committed gets here, once: a failed attempt's
+        // fires were rolled back and its result discarded with it. After an
+        // ambiguous commit the replay finds the claim and returns None, so
+        // that fire is not counted (rare under-count, never an over-count).
+        WaxyCandlesMetrics.RecordAlertsFired(evaluation);
+
+        return outcome;
     }
 
     /// <summary>
@@ -77,7 +87,7 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
     /// returns <see cref="ConsumeOutcome.AlreadyProcessed"/>, so the alerts are
     /// not evaluated, fired or written to the outbox a second time.
     /// </remarks>
-    private static async Task<ConsumeOutcome> ProcessOnceAsync(
+    private static async Task<(ConsumeOutcome Outcome, AlertEvaluationResult Evaluation)> ProcessOnceAsync(
         StockPriceUpdatedMessage message,
         AppDbContext dbContext,
         IAlertEvaluationService alertEvaluationService,
@@ -98,7 +108,7 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
 
         if (alreadyProcessed)
         {
-            return ConsumeOutcome.AlreadyProcessed;
+            return (ConsumeOutcome.AlreadyProcessed, AlertEvaluationResult.None);
         }
 
         await using var transaction =
@@ -124,10 +134,10 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
         catch (DbUpdateException ex)
             when (ex.IsUniqueConstraintViolation())
         {
-            return ConsumeOutcome.AlreadyProcessed;
+            return (ConsumeOutcome.AlreadyProcessed, AlertEvaluationResult.None);
         }
 
-        await alertEvaluationService.EvaluateAsync(
+        var evaluation = await alertEvaluationService.EvaluateAsync(
             message.Symbol,
             message.Price,
             message.Timestamp,
@@ -136,6 +146,6 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
         await transaction.CommitAsync(
             cancellationToken);
 
-        return ConsumeOutcome.Processed;
+        return (ConsumeOutcome.Processed, evaluation);
     }
 }

@@ -20,6 +20,9 @@ public sealed class FakeMarketDataProvider : IMarketDataProvider
 
     public List<StockCandle> Candles { get; set; } = [];
 
+    /// <summary>When set, every call throws it, like a provider failing at its HTTP boundary.</summary>
+    public Exception? Throw { get; set; }
+
     public IReadOnlyCollection<string> QuoteRequests => _quoteRequests.ToArray();
 
     public void SetQuote(string symbol, decimal price, DateTimeOffset? quotedAt = null) =>
@@ -36,6 +39,11 @@ public sealed class FakeMarketDataProvider : IMarketDataProvider
         IReadOnlyCollection<string> symbols,
         CancellationToken cancellationToken = default)
     {
+        if (Throw is { } exception)
+        {
+            throw exception;
+        }
+
         var quotes = new List<MarketQuote>();
 
         foreach (var symbol in symbols)
@@ -61,6 +69,11 @@ public sealed class FakeMarketDataProvider : IMarketDataProvider
         CandleInterval interval,
         CancellationToken cancellationToken = default)
     {
+        if (Throw is { } exception)
+        {
+            throw exception;
+        }
+
         // Fresh instances each call, like a real provider deserializing a response.
         IReadOnlyList<StockCandle> candles = Candles
             .Select(c => new StockCandle

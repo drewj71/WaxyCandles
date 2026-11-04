@@ -10,7 +10,7 @@ import {
     type Alert,
     type UpdateAlertRequest,
 } from "@/api/alerts";
-import { apiErrorMessages } from "@/api/errors";
+import { apiErrorMessages, apiErrorStatusMessage } from "@/api/errors";
 import { Route } from "@/routes/_dashboard/alerts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -222,7 +222,7 @@ function Alerts() {
     if (alertsQuery.error) {
         return (
             <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-                Failed to load alerts.
+                {apiErrorStatusMessage(alertsQuery.error) ?? "Failed to load alerts."}
             </div>
         );
     }

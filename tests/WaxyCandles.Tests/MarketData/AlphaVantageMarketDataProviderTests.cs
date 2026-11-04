@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Web;
 using Microsoft.Extensions.Configuration;
+using WaxyCandles.Application.MarketData.Exceptions;
 using WaxyCandles.Domain.Enums;
 using WaxyCandles.Infrastructure.MarketData.Providers;
 
@@ -90,14 +91,68 @@ public class AlphaVantageMarketDataProviderTests
     [Theory]
     [InlineData("Note")]
     [InlineData("Information")]
-    public async Task Quote_rate_limit_response_throws_with_alpha_vantages_message(string key)
+    public async Task Quote_rate_limit_response_throws_rate_limited(string key)
     {
         _handler.RespondWith($$"""{ "{{key}}": "{{RateLimitNote}}" }""");
+
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
+            () => Provider().GetCurrentQuoteAsync("AAPL"));
+
+        Assert.Equal(MarketDataUnavailableReason.RateLimited, ex.Reason);
+        Assert.Null(ex.RetryAfter);
+        Assert.DoesNotContain("Thank you", ex.Message);
+    }
+
+    [Fact]
+    public async Task Information_that_is_not_a_rate_limit_is_a_plain_error()
+    {
+        const string premium = "This is a premium endpoint.";
+        _handler.RespondWith($$"""{ "Information": "{{premium}}" }""");
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => Provider().GetCurrentQuoteAsync("AAPL"));
 
-        Assert.Equal($"Alpha Vantage error: {RateLimitNote}", ex.Message);
+        Assert.Equal($"Alpha Vantage error: {premium}", ex.Message);
+    }
+
+    [Fact]
+    public async Task Http_429_is_rate_limited_with_the_vendors_retry_after()
+    {
+        _handler.RespondWith("{}", HttpStatusCode.TooManyRequests);
+        _handler.RetryAfterSeconds = 42;
+
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
+            () => Provider().GetCurrentQuoteAsync("AAPL"));
+
+        Assert.Equal(MarketDataUnavailableReason.RateLimited, ex.Reason);
+        Assert.Equal(TimeSpan.FromSeconds(42), ex.RetryAfter);
+        Assert.Single(_handler.Requests);
+    }
+
+    [Fact]
+    public async Task Timeout_is_market_data_unavailable_and_not_retried()
+    {
+        _handler.Stall = true;
+
+        var provider = Provider(timeout: TimeSpan.FromMilliseconds(200));
+
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
+            () => provider.GetCurrentQuoteAsync("AAPL"));
+
+        Assert.Equal(MarketDataUnavailableReason.Timeout, ex.Reason);
+        Assert.IsType<TaskCanceledException>(ex.InnerException);
+        Assert.DoesNotContain(TestApiKey, ex.ToString());
+        Assert.Single(_handler.Requests);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_is_not_a_timeout()
+    {
+        _handler.Stall = true;
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Provider().GetCurrentQuoteAsync("AAPL", cts.Token));
     }
 
     [Fact]
@@ -265,14 +320,14 @@ public class AlphaVantageMarketDataProviderTests
     }
 
     [Fact]
-    public async Task Intraday_rate_limit_response_throws_with_alpha_vantages_message()
+    public async Task Intraday_rate_limit_response_throws_rate_limited()
     {
         _handler.RespondWith($$"""{ "Note": "{{RateLimitNote}}" }""");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
             () => Provider().GetHistoricalCandlesAsync("AAPL", CandleInterval.OneHour));
 
-        Assert.Equal($"Alpha Vantage error: {RateLimitNote}", ex.Message);
+        Assert.Equal(MarketDataUnavailableReason.RateLimited, ex.Reason);
     }
 
     [Fact]
@@ -280,15 +335,17 @@ public class AlphaVantageMarketDataProviderTests
     {
         _handler.RespondWith($$"""{ "Note": "{{RateLimitNote}}" }""");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<MarketDataUnavailableException>(
             () => Provider().GetHistoricalCandlesAsync("AAPL", CandleInterval.OneDay));
 
-        Assert.Equal($"Alpha Vantage error: {RateLimitNote}", ex.Message);
+        Assert.Equal(MarketDataUnavailableReason.RateLimited, ex.Reason);
     }
 
-    private AlphaVantageMarketDataProvider Provider(string? apiKey = TestApiKey) =>
+    private AlphaVantageMarketDataProvider Provider(
+        string? apiKey = TestApiKey,
+        TimeSpan? timeout = null) =>
         new(
-            new HttpClient(_handler),
+            new HttpClient(_handler) { Timeout = timeout ?? TimeSpan.FromSeconds(100) },
             new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -303,22 +360,40 @@ public class AlphaVantageMarketDataProviderTests
 
         public List<Uri> Requests { get; } = [];
 
+        public int? RetryAfterSeconds { get; set; }
+
+        /// <summary>Never answer until cancelled.</summary>
+        public bool Stall { get; set; }
+
         public void RespondWith(string body, HttpStatusCode status = HttpStatusCode.OK)
         {
             _body = body;
             _status = status;
         }
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             Requests.Add(request.RequestUri!);
 
-            return Task.FromResult(new HttpResponseMessage(_status)
+            if (Stall)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            var response = new HttpResponseMessage(_status)
             {
                 Content = new StringContent(_body, Encoding.UTF8, "application/json")
-            });
+            };
+
+            if (RetryAfterSeconds is { } seconds)
+            {
+                response.Headers.RetryAfter =
+                    new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(seconds));
+            }
+
+            return response;
         }
     }
 }

@@ -67,6 +67,22 @@ public class CorsTests(IntegrationFixture fixture) : ApiTestBase(fixture)
             Assert.Single(response.Headers.GetValues("Access-Control-Allow-Origin")));
     }
 
+    [Fact]
+    public async Task Retry_after_is_exposed_to_the_frontend()
+    {
+        // Not CORS-safelisted: without this the web app can't read the wait
+        // on a 429 (the API's limiter) or a 503 (the vendor's limit).
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/alerts");
+        request.Headers.Add("Origin", WaxyCandlesApiFactory.FrontendOrigin);
+
+        var response = await NewRawClient().SendAsync(request);
+
+        Assert.Contains(
+            "Retry-After",
+            Assert.Single(response.Headers.GetValues("Access-Control-Expose-Headers")).Split(','),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
     private Task<HttpResponseMessage> PreflightAsync(string origin) =>
         PreflightAsync(NewRawClient(), origin);
 

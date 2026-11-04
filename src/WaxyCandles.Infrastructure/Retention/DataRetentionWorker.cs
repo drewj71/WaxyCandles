@@ -87,7 +87,13 @@ public class DataRetentionWorker : BackgroundService
             (service, cutoff) => service.DeleteOldStockPricesAsync(cutoff, batchSize, cancellationToken),
             cancellationToken);
 
-        return new RetentionPassResult(outbox, processedMessages, stockPrices);
+        var refreshTokens = await DeleteAsync(
+            "RefreshTokens",
+            now - _options.RefreshTokenRetention,
+            (service, cutoff) => service.DeleteOldRefreshTokensAsync(cutoff, batchSize, cancellationToken),
+            cancellationToken);
+
+        return new RetentionPassResult(outbox, processedMessages, stockPrices, refreshTokens);
     }
 
     /// <returns>Rows deleted, or null if the table's deletes failed.</returns>
@@ -131,4 +137,5 @@ public class DataRetentionWorker : BackgroundService
 public record RetentionPassResult(
     int? OutboxMessages,
     int? ProcessedMessages,
-    int? StockPrices);
+    int? StockPrices,
+    int? RefreshTokens);

@@ -1,13 +1,12 @@
 import { useEffect, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { useQuery } from "@tanstack/react-query";
-import { isAxiosError } from "axios";
 import { Link } from "@tanstack/react-router";
 import { BellPlus, RefreshCw, Search, Star } from "lucide-react";
 
 import { Route } from "@/routes/_dashboard/gex";
 import { getGexTable, type GexNode } from "@/api/options";
-import { apiErrorMessages } from "@/api/errors";
+import { apiErrorMessages, shouldRetryQuery } from "@/api/errors";
 import type { GexLevelKind } from "@/api/alerts";
 
 import { Button } from "@/components/ui/button";
@@ -135,10 +134,9 @@ function Gex() {
         enabled: !!symbol,
         // The API caches each board for a minute; asking sooner returns the same one.
         staleTime: 60_000,
-        // A 4xx (unknown symbol, bad range) won't change on retry.
-        retry: (failureCount, error) =>
-            !(isAxiosError(error) && (error.response?.status ?? 500) < 500) &&
-            failureCount < 2,
+        // A 4xx (unknown symbol, bad range, our 429) won't change on retry, and
+        // a provider 503/504 would spend credits again; see shouldRetryQuery.
+        retry: shouldRetryQuery,
     });
 
     const updateSearch = (changes: Partial<typeof search>) =>

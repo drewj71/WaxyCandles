@@ -1,7 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using WaxyCandles.Application.MarketData.Exceptions;
 using WaxyCandles.Application.MarketData.Interfaces;
 using WaxyCandles.Application.MarketData.Models;
 using WaxyCandles.Domain.Entities;
@@ -11,6 +13,8 @@ namespace WaxyCandles.Infrastructure.MarketData.Providers;
 
 public class AlphaVantageMarketDataProvider : IMarketDataProvider
 {
+    private const string ProviderName = "Alpha Vantage";
+
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
 
@@ -65,14 +69,7 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
             $"&symbol={encodedSymbol}" +
             $"&apikey={apiKey}";
 
-        var response = await _httpClient.GetAsync(
-            url,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync(
-            cancellationToken);
+        var json = await GetJsonAsync(url, cancellationToken);
 
         using var document = JsonDocument.Parse(json);
 
@@ -188,14 +185,7 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
             $"&outputsize=compact" +
             $"&apikey={apiKey}";
 
-        var response = await _httpClient.GetAsync(
-            url,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync(
-            cancellationToken);
+        var json = await GetJsonAsync(url, cancellationToken);
 
         using var document = JsonDocument.Parse(json);
 
@@ -268,16 +258,7 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
             $"&outputsize=compact" +
             $"&apikey={apiKey}";
 
-        using var response =
-            await _httpClient.GetAsync(
-                url,
-                cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-
-        var json =
-            await response.Content.ReadAsStringAsync(
-                cancellationToken);
+        var json = await GetJsonAsync(url, cancellationToken);
 
         using var document =
             JsonDocument.Parse(json);
@@ -341,6 +322,50 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
             .ToList();
     }
 
+    /// <summary>
+    /// GETs a URL (which carries the API key, so it is never put in an
+    /// exception or log). A timeout or an HTTP 429 is a
+    /// MarketDataUnavailableException; any other non-2xx an HttpRequestException.
+    /// Never retried: every request counts against the daily allowance.
+    /// </summary>
+    private async Task<string> GetJsonAsync(
+        string url,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await _httpClient.GetAsync(
+                url,
+                cancellationToken);
+
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                var retryAfter = response.Headers.RetryAfter;
+
+                throw new MarketDataUnavailableException(
+                    MarketDataUnavailableReason.RateLimited,
+                    ProviderName,
+                    retryAfter?.Delta ?? retryAfter?.Date - DateTimeOffset.UtcNow);
+            }
+
+            response.EnsureSuccessStatusCode();
+
+            return await response.Content.ReadAsStringAsync(
+                cancellationToken);
+        }
+        // HttpClient.Timeout, not the caller cancelling (that has no inner
+        // TimeoutException and is rethrown as is).
+        catch (TaskCanceledException ex)
+            when (ex.InnerException is TimeoutException &&
+                  !cancellationToken.IsCancellationRequested)
+        {
+            throw new MarketDataUnavailableException(
+                MarketDataUnavailableReason.Timeout,
+                ProviderName,
+                innerException: ex);
+        }
+    }
+
     // Alpha Vantage timestamps carry no offset. They must not be parsed in the
     // server's local time zone, or the same candle becomes a different instant
     // on every machine (and candle dedup, which is by timestamp, breaks).
@@ -380,7 +405,11 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
     }
 
     // Alpha Vantage reports rate limits and other errors with a 200 status and an
-    // "Information" or "Note" field in place of the expected data.
+    // "Information" or "Note" field in place of the expected data. "Note" is the
+    // per-minute call-frequency limit; "Information" carries the daily limit
+    // ("...our standard API rate limit is 25 requests per day...") as well as
+    // other errors (premium-only endpoint, bad key), so only one that mentions a
+    // rate limit counts as rate limited.
     [DoesNotReturn]
     private static void ThrowAlphaVantageError(
         JsonElement root,
@@ -390,16 +419,24 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
                 "Information",
                 out var information))
         {
+            if (information.GetString()?.Contains(
+                    "rate limit",
+                    StringComparison.OrdinalIgnoreCase) == true)
+            {
+                throw new MarketDataUnavailableException(
+                    MarketDataUnavailableReason.RateLimited,
+                    ProviderName);
+            }
+
             throw new InvalidOperationException(
                 $"Alpha Vantage error: {information.GetString()}");
         }
 
-        if (root.TryGetProperty(
-                "Note",
-                out var note))
+        if (root.TryGetProperty("Note", out _))
         {
-            throw new InvalidOperationException(
-                $"Alpha Vantage error: {note.GetString()}");
+            throw new MarketDataUnavailableException(
+                MarketDataUnavailableReason.RateLimited,
+                ProviderName);
         }
 
         throw new InvalidOperationException(fallbackMessage);

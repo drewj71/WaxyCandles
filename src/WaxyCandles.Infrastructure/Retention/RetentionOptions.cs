@@ -50,6 +50,16 @@ public class RetentionOptions
     /// </summary>
     public TimeSpan StockPriceRetention { get; set; } = TimeSpan.FromDays(30);
 
+    /// <summary>
+    /// Refresh tokens are deleted once both <c>ExpiresAt</c> and
+    /// <c>RevokedAt</c> (if set) are older than this. Counting from expiry,
+    /// not revocation, keeps a rotated token for its whole 30-day lifetime, so
+    /// replaying it is still recognised as reuse and revokes its family; the
+    /// extra days only cover clock skew and a delayed pass. Nothing reads a
+    /// token after that: the browser cookie expires with it.
+    /// </summary>
+    public TimeSpan RefreshTokenRetention { get; set; } = TimeSpan.FromDays(7);
+
     /// <summary>Rows deleted per statement.</summary>
     public int BatchSize { get; set; } = 1000;
 }
