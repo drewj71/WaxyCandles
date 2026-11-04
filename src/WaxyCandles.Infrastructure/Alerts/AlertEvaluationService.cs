@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using WaxyCandles.Application.Alerts.DTOs;
 using WaxyCandles.Application.Alerts.Interfaces;
 using WaxyCandles.Application.Alerts.Messages;
 using WaxyCandles.Domain.Entities;
@@ -20,11 +21,11 @@ public class AlertEvaluationService : IAlertEvaluationService
         _dbContext = dbContext;
     }
 
-    public async Task EvaluateAsync(
-    string symbol,
-    decimal price,
-    DateTimeOffset? observedAt = null,
-    CancellationToken cancellationToken = default)
+    public async Task<AlertEvaluationResult> EvaluateAsync(
+        string symbol,
+        decimal price,
+        DateTimeOffset? observedAt = null,
+        CancellationToken cancellationToken = default)
     {
         // Claiming a trigger and writing its event must commit together.
         if (_dbContext.Database.CurrentTransaction is not null)
@@ -34,10 +35,10 @@ public class AlertEvaluationService : IAlertEvaluationService
             // error re-runs the caller's whole attempt, this included.
             var fired = await EvaluateOnceAsync(symbol, price, observedAt, added: null, cancellationToken);
 
-            // After the save. A later rollback in the caller (the AlertWorker)
-            // means the fire is retried and counted again.
-            RecordFired(fired);
-            return;
+            // Not recorded here: nothing is committed yet. The caller records
+            // the result after its commit, so a rollback or replay of its
+            // attempt never counts a fire.
+            return ToResult(fired);
         }
 
         // No caller transaction: use one here, inside the execution strategy
@@ -69,8 +70,16 @@ public class AlertEvaluationService : IAlertEvaluationService
             cancellationToken);
 
         // Only once committed, so a retried attempt isn't counted twice.
-        RecordFired(committed);
+        var result = ToResult(committed);
+        WaxyCandlesMetrics.RecordAlertsFired(result);
+        return result;
     }
+
+    private static AlertEvaluationResult ToResult(List<Alert> fired) =>
+        fired.Count == 0
+            ? AlertEvaluationResult.None
+            : new AlertEvaluationResult(
+                fired.Select(a => new FiredAlert(a.Id, a.Level)).ToList());
 
     /// <summary>
     /// One evaluation, read to save. Safe to run again after a rollback: it
@@ -125,18 +134,6 @@ public class AlertEvaluationService : IAlertEvaluationService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return fired;
-    }
-
-    private static void RecordFired(IEnumerable<Alert> fired)
-    {
-        foreach (var alert in fired)
-        {
-            WaxyCandlesMetrics.AlertsFired.Add(
-                1,
-                new KeyValuePair<string, object?>(
-                    WaxyCandlesMetrics.KindTag,
-                    alert.Level is null ? "price" : "level"));
-        }
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
+using WaxyCandles.Infrastructure.Health;
 using WaxyCandles.Infrastructure.Messaging;
 using WaxyCandles.Infrastructure.Persistence;
 using WaxyCandles.Infrastructure.Telemetry;
@@ -27,17 +28,22 @@ public class OutboxPublisherWorker : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<OutboxPublisherWorker> _logger;
 
+    // The health check's view of this loop; null where it isn't registered.
+    private readonly OutboxLoopHeartbeat? _heartbeat;
+
     // RabbitMqConnection is deliberately not injected: it connects in its
     // constructor, so injecting it would make constructing this hosted service
     // (and so starting the host) fail while the broker is unreachable.
     public OutboxPublisherWorker(
         IServiceProvider services,
         IServiceScopeFactory scopeFactory,
-        ILogger<OutboxPublisherWorker> logger)
+        ILogger<OutboxPublisherWorker> logger,
+        OutboxLoopHeartbeat? heartbeat = null)
     {
         _services = services;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _heartbeat = heartbeat;
     }
 
     protected override async Task ExecuteAsync(
@@ -70,6 +76,10 @@ public class OutboxPublisherWorker : BackgroundService
                 try
                 {
                     await RefreshBacklogAsync(stoppingToken);
+
+                    // The loop is iterating and can read the database. Before
+                    // the broker, so a RabbitMQ outage keeps the worker healthy.
+                    _heartbeat?.Beat();
                 }
                 catch (OperationCanceledException)
                     when (stoppingToken.IsCancellationRequested)
