@@ -69,7 +69,12 @@ public class NotificationService : INotificationService
 
         try
         {
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            // If the commit's outcome is unclear, check for this notification
+            // rather than re-inserting it: a retry would hit the unique index
+            // and report a duplicate, and the consumer would skip the push.
+            await _dbContext.SaveChangesVerifiedAsync(
+                ct => _dbContext.Notifications.AnyAsync(x => x.Id == notification.Id, ct),
+                cancellationToken);
         }
         catch (DbUpdateException ex)
             when (ex.IsUniqueConstraintViolation())

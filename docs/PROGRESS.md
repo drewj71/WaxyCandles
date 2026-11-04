@@ -18,18 +18,30 @@ Update this at the end of each working session.
 - [ ] **Deploy Phase 1**: apply migration `OutboxIndexesAndRetention` while the market is closed (index
   builds on the never-pruned outbox table block the publisher and poller). Expect the first
   retention pass to purge the backlog in paused batches.
-- [ ] **Roadmap Phase 2**:
-  - OPS-2: health checks (`/health/live`, `/health/ready` with DB and broker for the API; a heartbeat
-    for the workers, using `PricePollingHeartbeat`, stale only during market hours).
-  - REL-2: SQL transient-fault handling with an execution strategy around every explicit transaction.
-  - SEC-3: refresh tokens stored hashed (forces one re-login).
-  - REL-3: explicit HttpClient timeouts for the vendor clients.
+- [ ] **Deploy Phase 2**: migration `HashRefreshTokens` (hashes existing tokens in place, so nobody
+  logs in again; rolling it back deletes all refresh tokens). Check the worker containers report
+  healthy in `docker compose ps`.
+- [ ] **Phase 2 follow-ups**:
+  - Map a vendor timeout to 504 and a vendor 429 to 503 in `ExceptionHandlingMiddleware` (both are
+    a 500 today).
+  - An API container health check (the aspnet image has no curl) or an orchestrator HTTP probe.
+  - Explicit heartbeat calls in `OutboxPublisherWorker` and `RabbitMqConsumer`, instead of the
+    outbox check reading the backlog metric; would give the AlertWorker real stall detection.
+  - Share the RabbitMQ connection-factory settings between `RabbitMqConnection` and the broker
+    health check.
+  - Refresh-token reuse detection (revoke the chain on a replayed revoked token); drop or hash
+    `ReplacedByToken`; delete expired and revoked tokens in the retention worker; two concurrent
+    refreshes with one token can both succeed.
+  - Ambiguous-commit replays still give a 500 for watchlist remove and for `AuthService`/Identity
+    writes (rare).
+  - `marketdata.credits` misses timed-out requests.
 - [ ] **Phase 1 follow-ups**:
   - Retention metrics (rows deleted per table) now that the Meter exists.
   - An index on `StockPrices.Timestamp` if the retention delete shows up as slow.
   - Make `Prefetch_limit_lets_a_second_consumer_share_a_backlog` deterministic: it depends on
     timing and could flake on a slow CI agent.
-  - Record `alerts.fired` after the AlertWorker's commit (it can over-count today).
+  - Record `alerts.fired` after the AlertWorker's commit (it can over-count today, including on an
+    execution-strategy replay; needs an `IAlertEvaluationService` return-type change).
   - Any future dead-letter replay tool must stay inside the `ProcessedMessages` window (7 days).
   - Existing gap, not from Phase 1: creating an alert doesn't set `StateChangedAt`, so a price
     delayed in the pipeline that was observed before the alert existed can still fire it.
@@ -42,7 +54,6 @@ Update this at the end of each working session.
   - The web app has no 429 handling (it shows the generic error).
   - `RabbitMqConnection` connects synchronously and ignores cancellation; an async, cancellable
     connect would fix slow shutdown when the broker host doesn't answer.
-  - Phase 2: SEC-3, refresh tokens stored hashed (forces one re-login).
 - [ ] **IV analytics on the GEX page**: ATM IV term structure and skew per expiration, from the
   chain already fetched.
 - [ ] **Housekeeping (needs you)**: delete the 11 merged branches (my attempt was blocked by the
@@ -59,6 +70,27 @@ Update this at the end of each working session.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
 
 ## Log
+
+### 2026-11-03 (Phase 2)
+- Roadmap Phase 2, three parallel agents in separate worktrees, combined on `integration/phase2`.
+- `feat/health-checks` (OPS-2): API `/health/live` and `/health/ready` (database and broker),
+  anonymous and not rate-limited. Workers keep a heartbeat file fresh while healthy, and compose
+  checks it. The poller is unhealthy only when it misses polls while the market is open; a broker
+  outage doesn't mark any worker unhealthy.
+- `feat/sql-retry-http-timeouts` (REL-2, REL-3), plan approved first because it touches the
+  AlertWorker consumer:
+  - SQL retry strategy (3 retries, 5 s cap). `StockPriceConsumer` and `AlertEvaluationService` run
+    their transactions as replayable execution-strategy units. Unique keys, IDs set in code and the
+    conditional updates already prevent duplicates after an ambiguous commit; verified saves make
+    the poller, notification insert and alert create report success instead of failing.
+  - Short SQL blips no longer use up a queue retry; longer outages retry and dead-letter as before.
+  - Vendor HttpClients get timeouts only (20 s, options 30 s), never retries, so a billed request
+    is never paid twice. The market calendar no longer uses the 100 s default.
+- `feat/hashed-refresh-tokens` (SEC-3): refresh tokens are stored as SHA-256 hashes. The migration
+  hashes existing tokens, so nobody has to log in again.
+- Combined on `integration/phase2`: no overlapping files; full suite 562 passed, 0 failed (10 m 58 s).
+- The example appsettings files now list `Database` (all four), the vendor `Timeout` settings
+  (API and PricePollingWorker) and `Health` (workers).
 
 ### 2026-11-02 (Phase 1)
 - Roadmap Phase 1, two parallel agents in separate worktrees, combined on `integration/phase1`.

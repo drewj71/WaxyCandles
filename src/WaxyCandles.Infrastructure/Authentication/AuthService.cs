@@ -62,11 +62,13 @@ public class AuthService : IAuthService
 
         var accessToken = _tokenService.GenerateAccessToken(user);
 
+        var refreshTokenValue = _tokenService.GenerateRefreshToken();
+
         var refreshToken = new RefreshToken
         {
             Id = Guid.NewGuid(),
 
-            Token = _tokenService.GenerateRefreshToken(),
+            TokenHash = TokenService.HashRefreshToken(refreshTokenValue),
 
             UserId = user.Id,
 
@@ -83,7 +85,7 @@ public class AuthService : IAuthService
         return new AuthResponse
         {
             AccessToken = accessToken,
-            RefreshToken = refreshToken.Token,
+            RefreshToken = refreshTokenValue,
             ExpiresAt = DateTime.UtcNow.AddMinutes(15)
         };
     }
@@ -108,11 +110,13 @@ public class AuthService : IAuthService
 
         var accessToken = _tokenService.GenerateAccessToken(user);
 
+        var refreshTokenValue = _tokenService.GenerateRefreshToken();
+
         var refreshToken = new RefreshToken
         {
             Id = Guid.NewGuid(),
 
-            Token = _tokenService.GenerateRefreshToken(),
+            TokenHash = TokenService.HashRefreshToken(refreshTokenValue),
 
             UserId = user.Id,
 
@@ -128,7 +132,7 @@ public class AuthService : IAuthService
         return new AuthResponse
         {
             AccessToken = accessToken,
-            RefreshToken = refreshToken.Token,
+            RefreshToken = refreshTokenValue,
             ExpiresAt = DateTime.UtcNow.AddMinutes(15)
         };
     }
@@ -136,8 +140,10 @@ public class AuthService : IAuthService
     public async Task<AuthResponse> RefreshTokenAsync(
     RefreshTokenRequest request)
     {
+        var tokenHash = TokenService.HashRefreshToken(request.RefreshToken);
+
         var storedToken = await _dbContext.RefreshTokens
-            .FirstOrDefaultAsync(x => x.Token == request.RefreshToken) ?? throw new InvalidRefreshTokenException("Invalid refresh token.");
+            .FirstOrDefaultAsync(x => x.TokenHash == tokenHash) ?? throw new InvalidRefreshTokenException("Invalid refresh token.");
 
         if (!storedToken.IsActive)
         {
@@ -150,11 +156,13 @@ public class AuthService : IAuthService
         // Rotate refresh token
         storedToken.RevokedAt = DateTime.UtcNow;
 
+        var newRefreshTokenValue = _tokenService.GenerateRefreshToken();
+
         var newRefreshToken = new RefreshToken
         {
             Id = Guid.NewGuid(),
 
-            Token = _tokenService.GenerateRefreshToken(),
+            TokenHash = TokenService.HashRefreshToken(newRefreshTokenValue),
 
             UserId = user.Id,
 
@@ -174,7 +182,7 @@ public class AuthService : IAuthService
         {
             AccessToken = accessToken,
 
-            RefreshToken = newRefreshToken.Token,
+            RefreshToken = newRefreshTokenValue,
 
             ExpiresAt = DateTime.UtcNow.AddMinutes(15)
         };
@@ -182,8 +190,10 @@ public class AuthService : IAuthService
 
     public async Task LogoutAsync(LogoutRequest request)
     {
+        var tokenHash = TokenService.HashRefreshToken(request.RefreshToken);
+
         var refreshToken = await _dbContext.RefreshTokens
-            .FirstOrDefaultAsync(x => x.Token == request.RefreshToken);
+            .FirstOrDefaultAsync(x => x.TokenHash == tokenHash);
 
         if (refreshToken == null)
         {

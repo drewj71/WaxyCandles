@@ -57,7 +57,12 @@ public class AlertService : IAlertService
 
         _dbContext.Alerts.Add(alert);
 
-        await _dbContext.SaveChangesAsync();
+        // The level lookup (an HTTP call) is above, so a retried save never
+        // repeats it. If the commit's outcome is unclear, check for the alert
+        // rather than re-inserting it, which would fail with a duplicate key
+        // (a 500 for an alert that was created).
+        await _dbContext.SaveChangesVerifiedAsync(
+            ct => _dbContext.Alerts.AnyAsync(a => a.Id == alert.Id, ct));
 
         return AlertResponse.From(alert, now);
     }
@@ -238,18 +243,16 @@ public class AlertService : IAlertService
 
     public async Task DeleteAsync(Guid id, string userId)
     {
-        var alert = await _dbContext.Alerts
-            .FirstOrDefaultAsync(a =>
+        // One statement, so a retry after a transient error is harmless: if
+        // the first attempt's delete committed, the retry deletes nothing.
+        // (A tracked delete expects one row affected and would throw a
+        // concurrency exception instead.) Nothing references Alerts by foreign
+        // key (Notification.AlertId is a plain column), so there's no cascade
+        // for EF to have done client-side.
+        await _dbContext.Alerts
+            .Where(a =>
                 a.Id == id &&
-                a.UserId == userId);
-
-        if (alert is null)
-        {
-            return;
-        }
-
-        _dbContext.Alerts.Remove(alert);
-
-        await _dbContext.SaveChangesAsync();
+                a.UserId == userId)
+            .ExecuteDeleteAsync();
     }
 }

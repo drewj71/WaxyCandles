@@ -69,6 +69,7 @@ public class MarketDataService : IMarketDataService
 
         var polledAt = DateTimeOffset.UtcNow;
         var stored = 0;
+        Guid? firstOutboxId = null;
 
         foreach (var symbol in symbols)
         {
@@ -124,10 +125,21 @@ public class MarketDataService : IMarketDataService
 
             _dbContext.StockPrices.Add(stockPrice);
             _dbContext.OutboxMessages.Add(outboxMessage);
+            firstOutboxId ??= outboxMessage.Id;
             stored++;
         }
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        if (firstOutboxId is { } savedId)
+        {
+            // The quotes were fetched above, outside the save, so a retried
+            // save never repeats the (billed) request. The rows commit
+            // together; if the commit's outcome is unclear, one of them being
+            // there means all of them are, and re-inserting would only fail
+            // with a duplicate key.
+            await _dbContext.SaveChangesVerifiedAsync(
+                ct => _dbContext.OutboxMessages.AnyAsync(x => x.Id == savedId, ct),
+                cancellationToken);
+        }
 
         WaxyCandlesMetrics.PricesStored.Add(stored);
     }

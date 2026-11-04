@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WaxyCandles.Application.Authentication.DTOs;
@@ -43,6 +45,38 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Only_the_hash_of_the_refresh_token_is_stored()
+    {
+        var response = await RegisterAsync("alice@example.com");
+
+        await using var db = NewDbContext();
+        var stored = await db.RefreshTokens.SingleAsync();
+
+        Assert.Equal(SHA256.HashData(Encoding.UTF8.GetBytes(response.RefreshToken)), stored.TokenHash);
+        Assert.Equal(32, stored.TokenHash.Length);
+
+        // Nothing in the row, read as raw SQL, holds the token handed to the client.
+        var rawColumns = await db.Database
+            .SqlQueryRaw<string>(
+                "SELECT CONCAT_WS('|', [Id], [UserId], [ReplacedByToken], " +
+                "CONVERT(varchar(64), [TokenHash], 2)) AS [Value] FROM [RefreshTokens]")
+            .SingleAsync();
+        Assert.DoesNotContain(response.RefreshToken, rawColumns);
+    }
+
+    [Fact]
+    public async Task Each_login_stores_a_distinct_hash()
+    {
+        var registered = await RegisterAsync("alice@example.com");
+        var login = await WithAuthServiceAsync(auth => auth.LoginAsync(
+            new LoginRequest { Email = "alice@example.com", Password = Password }));
+
+        Assert.NotEqual(
+            (await LoadTokenAsync(registered.RefreshToken)).Id,
+            (await LoadTokenAsync(login.RefreshToken)).Id);
+    }
+
+    [Fact]
     public async Task Refreshing_rotates_the_token_and_revokes_the_old_one()
     {
         var registered = await RegisterAsync("alice@example.com");
@@ -73,14 +107,41 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Reusing_a_rotated_token_does_not_revoke_its_replacement()
+    {
+        // Current behavior: a replayed rotated token is rejected, but the
+        // session it was rotated into stays usable (no family revocation).
+        var registered = await RegisterAsync("alice@example.com");
+        var refreshed = await RefreshAsync(registered.RefreshToken);
+
+        await Assert.ThrowsAsync<InvalidRefreshTokenException>(
+            () => RefreshAsync(registered.RefreshToken));
+
+        Assert.True((await LoadTokenAsync(refreshed.RefreshToken)).IsActive);
+        await RefreshAsync(refreshed.RefreshToken);
+    }
+
+    [Fact]
+    public async Task The_stored_hash_is_not_accepted_as_a_refresh_token()
+    {
+        var registered = await RegisterAsync("alice@example.com");
+        var stored = await LoadTokenAsync(registered.RefreshToken);
+
+        var ex = await Assert.ThrowsAsync<InvalidRefreshTokenException>(
+            () => RefreshAsync(Convert.ToBase64String(stored.TokenHash)));
+
+        Assert.Equal("Invalid refresh token.", ex.Message);
+    }
+
+    [Fact]
     public async Task Expired_token_is_rejected()
     {
         var registered = await RegisterAsync("alice@example.com");
 
         await using (var db = NewDbContext())
         {
-            var stored = await db.RefreshTokens.SingleAsync(
-                t => t.Token == registered.RefreshToken);
+            var hash = TokenService.HashRefreshToken(registered.RefreshToken);
+            var stored = await db.RefreshTokens.SingleAsync(t => t.TokenHash == hash);
             stored.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1);
             await db.SaveChangesAsync();
         }
@@ -159,6 +220,7 @@ public class RefreshTokenRotationTests(IntegrationFixture fixture)
     private async Task<RefreshToken> LoadTokenAsync(string token)
     {
         await using var db = NewDbContext();
-        return await db.RefreshTokens.SingleAsync(t => t.Token == token);
+        var hash = TokenService.HashRefreshToken(token);
+        return await db.RefreshTokens.SingleAsync(t => t.TokenHash == hash);
     }
 }

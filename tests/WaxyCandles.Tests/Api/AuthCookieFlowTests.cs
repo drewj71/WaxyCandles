@@ -6,8 +6,10 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
+using WaxyCandles.Infrastructure.Authentication;
 using WaxyCandles.Infrastructure.Identity;
 using WaxyCandles.Tests.Infrastructure;
 
@@ -176,6 +178,30 @@ public class AuthCookieFlowTests(IntegrationFixture fixture) : ApiTestBase(fixtu
         Assert.NotEqual(oldAccess, alice.Cookie(AccessTokenCookie));
         Assert.NotEqual(oldRefresh, alice.Cookie(RefreshTokenCookie));
         Assert.Equal(HttpStatusCode.OK, (await alice.Http.GetAsync("/api/auth/me")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Login_refresh_logout_store_and_match_only_the_cookie_hash()
+    {
+        var alice = await RegisteredClientAsync("alice@example.com");
+        (await LoginAsync(alice.Http, "alice@example.com")).EnsureSuccessStatusCode();
+        var loginHash = TokenService.HashRefreshToken(RefreshCookieValue(alice));
+
+        (await alice.Http.PostAsync("/api/auth/refresh", null)).EnsureSuccessStatusCode();
+        var rotatedHash = TokenService.HashRefreshToken(RefreshCookieValue(alice));
+
+        await using (var db = NewDbContext())
+        {
+            Assert.True((await db.RefreshTokens.SingleAsync(t => t.TokenHash == loginHash)).IsRevoked);
+            Assert.True((await db.RefreshTokens.SingleAsync(t => t.TokenHash == rotatedHash)).IsActive);
+        }
+
+        (await alice.Http.PostAsync("/api/auth/logout", null)).EnsureSuccessStatusCode();
+
+        await using (var db = NewDbContext())
+        {
+            Assert.True((await db.RefreshTokens.SingleAsync(t => t.TokenHash == rotatedHash)).IsRevoked);
+        }
     }
 
     [Fact]
@@ -378,6 +404,10 @@ public class AuthCookieFlowTests(IntegrationFixture fixture) : ApiTestBase(fixtu
         var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         return await users.FindByEmailAsync(email);
     }
+
+    // The cookie holds the token URL-encoded (base64 has '+', '/' and '=').
+    private static string RefreshCookieValue(ApiClient client) =>
+        Uri.UnescapeDataString(client.Cookie(RefreshTokenCookie)!);
 
     private static string CreateToken(string userId, string signingKey, DateTime? expires = null)
     {

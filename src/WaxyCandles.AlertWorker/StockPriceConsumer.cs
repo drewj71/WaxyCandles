@@ -55,6 +55,39 @@ public class StockPriceConsumer : RabbitMqConsumer<StockPriceUpdatedMessage>
         var alertEvaluationService =
             scopedServices.GetRequiredService<IAlertEvaluationService>();
 
+        // Transient SQL errors re-run the whole attempt, from the fast path to
+        // the commit (EF's retrying execution strategy; the evaluation inside
+        // joins this attempt rather than retrying on its own). Once the retries
+        // are used up the error reaches RabbitMqConsumer: queue retry, then
+        // dead-letter, as before.
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync(
+            ct => ProcessOnceAsync(message, dbContext, alertEvaluationService, ct),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// One attempt. Safe to run again from the start: nothing read or tracked
+    /// by a failed attempt is reused.
+    /// </summary>
+    /// <remarks>
+    /// After an ambiguous commit (it reached the database, but the client saw
+    /// a transient error) the next attempt finds this message's claim and
+    /// returns <see cref="ConsumeOutcome.AlreadyProcessed"/>, so the alerts are
+    /// not evaluated, fired or written to the outbox a second time.
+    /// </remarks>
+    private static async Task<ConsumeOutcome> ProcessOnceAsync(
+        StockPriceUpdatedMessage message,
+        AppDbContext dbContext,
+        IAlertEvaluationService alertEvaluationService,
+        CancellationToken cancellationToken)
+    {
+        // A failed attempt's claim and outbox rows were rolled back in the
+        // database but are still tracked (Added, or Unchanged if saved before
+        // the rollback). The context belongs to this message's scope only.
+        dbContext.ChangeTracker.Clear();
+
         // Fast path for ordinary redeliveries. Not a guarantee on its own:
         // the claim below is what ensures a message is evaluated only once.
         var alreadyProcessed =
