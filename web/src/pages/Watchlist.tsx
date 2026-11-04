@@ -11,6 +11,7 @@ import {
     getWatchlistQuotes,
     removeFromWatchlist,
 } from "@/api/watchlist";
+import { apiErrorStatusMessage } from "@/api/errors";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -91,11 +92,11 @@ function Watchlist() {
 
     const error =
         watchlistQuery.error
-            ? "Failed to load your watchlist."
+            ? apiErrorStatusMessage(watchlistQuery.error) ?? "Failed to load your watchlist."
             : addMutation.error
-                ? "Failed to add symbol to watchlist."
+                ? apiErrorStatusMessage(addMutation.error) ?? "Failed to add symbol to watchlist."
                 : removeMutation.error
-                    ? "Failed to remove symbol."
+                    ? apiErrorStatusMessage(removeMutation.error) ?? "Failed to remove symbol."
                     : "";
 
     function handleAdd(data: WatchlistFormValues) {

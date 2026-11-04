@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using WaxyCandles.Application.MarketData.Exceptions;
 using WaxyCandles.Infrastructure.Telemetry;
 
 namespace WaxyCandles.Infrastructure.MarketData.Providers;
@@ -11,6 +12,9 @@ namespace WaxyCandles.Infrastructure.MarketData.Providers;
 internal static class MarketDataAppApi
 {
     public const string BaseUrl = "https://api.marketdata.app/v1";
+
+    /// <summary>The vendor name in MarketDataUnavailableException.</summary>
+    public const string ProviderName = "Market Data";
 
     /// <summary>
     /// Named HttpClients, each with its timeout (HttpClientTimeouts): stock
@@ -26,6 +30,9 @@ internal static class MarketDataAppApi
     public const string CreditsConsumedHeader = "X-Api-Ratelimit-Consumed";
     public const string CreditsRemainingHeader = "X-Api-Ratelimit-Remaining";
 
+    // When the current window resets, as UTC epoch seconds.
+    public const string RateLimitResetHeader = "X-Api-Ratelimit-Reset";
+
     /// <summary>Endpoint kinds, the waxycandles.marketdata.* "endpoint" tag.</summary>
     public static class Endpoints
     {
@@ -39,7 +46,8 @@ internal static class MarketDataAppApi
     /// <summary>
     /// Sends an authenticated GET. Returns null when Market Data has no data for
     /// the request (HTTP 404, s = "no_data", or HTTP 204, a cached-mode miss);
-    /// throws on any other failure.
+    /// throws on any other failure: MarketDataUnavailableException for a
+    /// timeout or a 429 (credits spent), InvalidOperationException otherwise.
     /// </summary>
     public static async Task<JsonDocument?> GetAsync(
         HttpClient httpClient,
@@ -78,12 +86,15 @@ internal static class MarketDataAppApi
         }
         // HttpClient.Timeout. Never retried: a response that was already
         // being sent may have been billed. The caller sees the exception (the
-        // poller logs it and polls again on schedule; the API returns 500).
+        // poller logs it and polls again on schedule; the API returns 504).
         catch (TaskCanceledException ex)
             when (ex.InnerException is TimeoutException)
         {
             outcome = "timeout";
-            throw;
+            throw new MarketDataUnavailableException(
+                MarketDataUnavailableReason.Timeout,
+                ProviderName,
+                innerException: ex);
         }
         finally
         {
@@ -119,6 +130,16 @@ internal static class MarketDataAppApi
 
         var json = await response.Content.ReadAsStringAsync(
             cancellationToken);
+
+        // Credits spent (or, on Quant/Prime, the per-minute limit). Not retried;
+        // the API returns 503 with the vendor's wait, if it gave one.
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        {
+            throw new MarketDataUnavailableException(
+                MarketDataUnavailableReason.RateLimited,
+                ProviderName,
+                RetryAfter(response, DateTimeOffset.UtcNow));
+        }
 
         // 2xx includes 203, which Market Data uses for answers from its cache.
         if (!response.IsSuccessStatusCode)
@@ -182,6 +203,24 @@ internal static class MarketDataAppApi
         {
             WaxyCandlesMetrics.SetMarketDataCreditsRemaining(remaining);
         }
+    }
+
+    /// <summary>
+    /// How long a 429 says to wait: the standard Retry-After (seconds or a
+    /// date), else the time until the X-Api-Ratelimit-Reset epoch. Null if
+    /// neither is present or the moment has passed.
+    /// </summary>
+    internal static TimeSpan? RetryAfter(HttpResponseMessage response, DateTimeOffset now)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+
+        var delay = retryAfter?.Delta
+            ?? (retryAfter?.Date is { } date ? date - now : (TimeSpan?)null)
+            ?? (HeaderLong(response, RateLimitResetHeader) is { } reset
+                ? DateTimeOffset.FromUnixTimeSeconds(reset) - now
+                : (TimeSpan?)null);
+
+        return delay > TimeSpan.Zero ? delay : null;
     }
 
     private static long? HeaderLong(HttpResponseMessage response, string name) =>

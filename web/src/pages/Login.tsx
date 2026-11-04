@@ -2,6 +2,7 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { login } from "@/api/auth";
+import { apiErrorStatusMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import {
     Card,
@@ -116,7 +117,9 @@ function Login() {
 
                         {loginMutation.isError && (
                             <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-                                Invalid email or password.
+                                {/* A 429 (too many attempts from this IP) isn't a wrong password. */}
+                                {apiErrorStatusMessage(loginMutation.error) ??
+                                    "Invalid email or password."}
                             </div>
                         )}
 

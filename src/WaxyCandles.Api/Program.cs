@@ -57,7 +57,10 @@ builder.Services.AddCors(options =>
             .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod()
-            .AllowCredentials();
+            .AllowCredentials()
+            // Not CORS-safelisted, so the web app can only read the wait on a
+            // 429 (our limiter) or 503 (vendor limit) if it is exposed.
+            .WithExposedHeaders("Retry-After");
     });
 });
 

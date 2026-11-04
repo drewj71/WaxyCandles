@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Flame, Star } from "lucide-react";
 import { Route } from "@/routes/_dashboard/stocks/$symbol";
 import { getStockDetails } from "@/api/stocks";
+import { apiErrorStatusMessage } from "@/api/errors";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -71,7 +72,8 @@ function Stock() {
                 </Button>
 
                 <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-                    Unable to load current market data for {symbol?.toUpperCase()}.
+                    {apiErrorStatusMessage(stockQuery.error) ??
+                        `Unable to load current market data for ${symbol?.toUpperCase()}.`}
                 </div>
             </div>
         );
