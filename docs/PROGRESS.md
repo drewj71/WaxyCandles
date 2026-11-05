@@ -23,6 +23,17 @@ Update this at the end of each working session.
   healthy in `docker compose ps`.
 - [ ] **Deploy the hardening batch**: migration `RefreshTokenFamilies` (quick; two indexes on
   `RefreshTokens`). Reuse detection covers only rotations after it.
+- [ ] **Deploy the features batch**: migration `NamedWatchlists` (rewrites `Watchlists`; quick on a
+  small table). Then try the web app live: watchlist tabs and live ticks during market hours, a
+  backtest on SPY (imports history once, about 5 credits for 20 years).
+- [ ] **Features follow-ups**:
+  - Count only real imports against the backtest rate limit, not every backtest.
+  - Remember "no data before X" per symbol, so a symbol with shorter history doesn't re-import
+    (about 1 credit) on every backtest.
+  - The history-import endpoint can store today's partial candle during market hours.
+  - Stock page "Add to watchlist" star does nothing yet; watchlist limits can be exceeded by one
+    under concurrent adds.
+  - Next: parameter sweeps (heatmap), saved backtests, shorting, a rule builder.
 - [ ] **Phase 2 and hardening follow-ups**:
   - An API container health check (the aspnet image has no curl) or an orchestrator HTTP probe.
   - Share the RabbitMQ connection-factory settings between `RabbitMqConnection` and the broker
@@ -67,6 +78,23 @@ Update this at the end of each working session.
   - Schwab streaming (WebSocket) vs. keeping the current poll → outbox pipeline.
 
 ## Log
+
+### 2026-11-04 (features: live prices, watchlists, backtesting)
+- Two parallel agents, combined on `integration/features`.
+- Live prices and watchlists (`feat/live-prices-watchlists`):
+  - `PricesHub` (`/hubs/prices`) plus `LivePriceBroadcaster`: new stored prices pushed to subscribed
+    browsers every 2 s, read from `StockPrices` only (no queue or vendor changes). Stock page price,
+    change and forming candle tick live; "Live / Market closed" indicator.
+  - Named watchlists (migration `NamedWatchlists`, hand-written, moves rows into "My Watchlist"),
+    `/api/watchlists` CRUD and reorder, sortable quote table with 30-day sparklines. The old
+    `/api/watchlist` endpoints act on the first list. Poller symbol set unchanged (pinned by a test).
+  - Stock details now return the real `PreviousClose` and `QuotedAt` (previous close showed $0).
+- Backtesting (`feat/backtesting`): pure engine (next-open fills, long-only, costs), MA crossover,
+  RSI mean reversion, Donchian breakout and buy-and-hold benchmark; `POST /api/backtests` imports a
+  missing range once (shares the `history-import` limit); `/backtest` page with metrics, equity curve,
+  trade markers and a trades table. History imports now retry on duplicate-key races.
+- Combined: one trivial chart conflict; full suite 749 passed, 0 failed (15 m 48 s); web build and
+  lint pass.
 
 ### 2026-11-04 (hardening batch)
 - Follow-ups from Phases 0–2, three parallel agents, combined on `integration/hardening`.
