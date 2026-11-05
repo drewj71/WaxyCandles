@@ -10,6 +10,17 @@ public interface IHistoricalMarketDataService
         CandleInterval interval,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Imports daily candles for trading dates <paramref name="from"/> to
+    /// <paramref name="to"/> (inclusive) in one billed provider request, storing
+    /// those not already stored. Returns how many were added.
+    /// </summary>
+    Task<int> ImportDailyCandlesAsync(
+        string symbol,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<StockCandleDto>> GetHistoricalCandlesAsync(
         string symbol,
         CandleInterval interval,

@@ -170,6 +170,31 @@ public class AlphaVantageMarketDataProvider : IMarketDataProvider
             cancellationToken);
     }
 
+    /// <remarks>
+    /// Alpha Vantage's free daily series is "compact" (the latest 100 trading
+    /// days; "full" is a premium feature), so this returns only the part of
+    /// the range inside those 100 days.
+    /// </remarks>
+    public async Task<IReadOnlyList<StockCandle>> GetDailyCandlesAsync(
+        string symbol,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken = default)
+    {
+        var candles = await GetHistoricalCandlesAsync(
+            symbol,
+            CandleInterval.OneDay,
+            cancellationToken);
+
+        var start = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var end = new DateTimeOffset(to.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+
+        return candles
+            .Where(x => x.Timestamp >= start && x.Timestamp <= end)
+            .OrderBy(x => x.Timestamp)
+            .ToList();
+    }
+
     private async Task<IReadOnlyList<StockCandle>> GetDailyCandlesAsync(
         string symbol,
         string apiKey,

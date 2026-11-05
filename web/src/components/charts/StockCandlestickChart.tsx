@@ -2,9 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import {
     createChart,
     CandlestickSeries,
+    createSeriesMarkers,
     HistogramSeries,
     type IChartApi,
     type ISeriesApi,
+    type ISeriesMarkersPluginApi,
+    type SeriesMarker,
+    type Time,
     type UTCTimestamp,
 } from "lightweight-charts";
 
@@ -17,9 +21,19 @@ type Candle = {
     volume: number;
 };
 
+/** A trade arrow on a candle: buys below the bar, sells above it. */
+export type CandleMarker = {
+    /** The candle's timestamp (same format as the candles). */
+    timestamp: string;
+    side: "buy" | "sell";
+    text?: string;
+};
+
 type StockCandlestickChartProps = {
     candles: Candle[];
     timeframe: string;
+    /** Optional, e.g. a backtest's fills. */
+    markers?: CandleMarker[];
 };
 
 const easternParts = new Intl.DateTimeFormat("en-US", {
@@ -81,6 +95,7 @@ function candleLabel(timestamp: string, intraday: boolean): string {
 function StockCandlestickChart({
     candles,
     timeframe,
+    markers,
 }: StockCandlestickChartProps) {
     const chartContainerRef =
         useRef<HTMLDivElement>(null);
@@ -93,6 +108,9 @@ function StockCandlestickChart({
 
     const volumeSeriesRef =
         useRef<ISeriesApi<"Histogram"> | null>(null);
+
+    const markersRef =
+        useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
     // The candles currently drawn, by chart time, for the crosshair tooltip.
     // A ref so the handler registered once at mount sees the latest data.
@@ -168,6 +186,7 @@ function StockCandlestickChart({
 
         chartRef.current = chart;
         seriesRef.current = candlestickSeries;
+        markersRef.current = createSeriesMarkers(candlestickSeries, []);
         volumeSeriesRef.current = volumeSeries;
 
         const handleResize = () => {
@@ -207,6 +226,7 @@ function StockCandlestickChart({
 
             chartRef.current = null;
             seriesRef.current = null;
+            markersRef.current = null;
         };
     }, []);
 
@@ -259,6 +279,25 @@ function StockCandlestickChart({
             ?.timeScale()
             .fitContent();
     }, [candles, intraday]);
+
+    useEffect(() => {
+        if (!markersRef.current) {
+            return;
+        }
+
+        // Markers must be in time order.
+        const seriesMarkers: SeriesMarker<Time>[] = (markers ?? [])
+            .map((marker) => ({
+                time: chartTime(marker.timestamp, intraday),
+                position: marker.side === "buy" ? "belowBar" as const : "aboveBar" as const,
+                shape: marker.side === "buy" ? "arrowUp" as const : "arrowDown" as const,
+                color: marker.side === "buy" ? "#22c55e" : "#ef4444",
+                text: marker.text,
+            }))
+            .sort((a, b) => a.time - b.time);
+
+        markersRef.current.setMarkers(seriesMarkers);
+    }, [markers, intraday]);
 
     return (
         <div

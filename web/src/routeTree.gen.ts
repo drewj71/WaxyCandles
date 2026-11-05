@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteRouteImport } from './routes/_dashboard/route'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardAlertsRouteImport } from './routes/_dashboard/alerts'
+import { Route as DashboardBacktestRouteImport } from './routes/_dashboard/backtest'
 import { Route as DashboardDashboardRouteImport } from './routes/_dashboard/dashboard'
 import { Route as DashboardGexRouteImport } from './routes/_dashboard/gex'
 import { Route as DashboardWatchlistRouteImport } from './routes/_dashboard/watchlist'
@@ -35,6 +36,11 @@ const LoginRoute = LoginRouteImport.update({
 const DashboardAlertsRoute = DashboardAlertsRouteImport.update({
   id: '/alerts',
   path: '/alerts',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
+const DashboardBacktestRoute = DashboardBacktestRouteImport.update({
+  id: '/backtest',
+  path: '/backtest',
   getParentRoute: () => DashboardRouteRoute,
 } as any)
 const DashboardDashboardRoute = DashboardDashboardRouteImport.update({
@@ -62,6 +68,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/alerts': typeof DashboardAlertsRoute
+  '/backtest': typeof DashboardBacktestRoute
   '/dashboard': typeof DashboardDashboardRoute
   '/gex': typeof DashboardGexRoute
   '/watchlist': typeof DashboardWatchlistRoute
@@ -71,6 +78,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/alerts': typeof DashboardAlertsRoute
+  '/backtest': typeof DashboardBacktestRoute
   '/dashboard': typeof DashboardDashboardRoute
   '/gex': typeof DashboardGexRoute
   '/watchlist': typeof DashboardWatchlistRoute
@@ -82,6 +90,7 @@ export interface FileRoutesById {
   '/_dashboard': typeof DashboardRouteRouteWithChildren
   '/login': typeof LoginRoute
   '/_dashboard/alerts': typeof DashboardAlertsRoute
+  '/_dashboard/backtest': typeof DashboardBacktestRoute
   '/_dashboard/dashboard': typeof DashboardDashboardRoute
   '/_dashboard/gex': typeof DashboardGexRoute
   '/_dashboard/watchlist': typeof DashboardWatchlistRoute
@@ -93,6 +102,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/alerts'
+    | '/backtest'
     | '/dashboard'
     | '/gex'
     | '/watchlist'
@@ -102,6 +112,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/alerts'
+    | '/backtest'
     | '/dashboard'
     | '/gex'
     | '/watchlist'
@@ -112,6 +123,7 @@ export interface FileRouteTypes {
     | '/_dashboard'
     | '/login'
     | '/_dashboard/alerts'
+    | '/_dashboard/backtest'
     | '/_dashboard/dashboard'
     | '/_dashboard/gex'
     | '/_dashboard/watchlist'
@@ -154,6 +166,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardAlertsRouteImport
       parentRoute: typeof DashboardRouteRoute
     }
+    '/_dashboard/backtest': {
+      id: '/_dashboard/backtest'
+      path: '/backtest'
+      fullPath: '/backtest'
+      preLoaderRoute: typeof DashboardBacktestRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
     '/_dashboard/dashboard': {
       id: '/_dashboard/dashboard'
       path: '/dashboard'
@@ -187,6 +206,7 @@ declare module '@tanstack/react-router' {
 
 interface DashboardRouteRouteChildren {
   DashboardAlertsRoute: typeof DashboardAlertsRoute
+  DashboardBacktestRoute: typeof DashboardBacktestRoute
   DashboardDashboardRoute: typeof DashboardDashboardRoute
   DashboardGexRoute: typeof DashboardGexRoute
   DashboardWatchlistRoute: typeof DashboardWatchlistRoute
@@ -195,6 +215,7 @@ interface DashboardRouteRouteChildren {
 
 const DashboardRouteRouteChildren: DashboardRouteRouteChildren = {
   DashboardAlertsRoute: DashboardAlertsRoute,
+  DashboardBacktestRoute: DashboardBacktestRoute,
   DashboardDashboardRoute: DashboardDashboardRoute,
   DashboardGexRoute: DashboardGexRoute,
   DashboardWatchlistRoute: DashboardWatchlistRoute,

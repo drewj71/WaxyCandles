@@ -111,6 +111,44 @@ public static class MarketHours
         return new MarketStatus(false, await NextOpenAsync(now, calendar, cancellationToken));
     }
 
+    /// <summary>
+    /// The latest trading date whose regular session has closed by
+    /// <paramref name="now"/>: today once it is 16:00 ET or later, else an
+    /// earlier day, skipping days the calendar says don't trade. Its daily
+    /// candle is complete.
+    /// </summary>
+    public static async Task<DateOnly> LastClosedTradingDateAsync(
+        DateTimeOffset now,
+        IMarketCalendar calendar,
+        CancellationToken cancellationToken = default)
+    {
+        var eastern = TimeZoneInfo.ConvertTime(now, MarketTimeZone);
+        var today = DateOnly.FromDateTime(eastern.Date);
+        var first = eastern.TimeOfDay >= Close ? today : today.AddDays(-1);
+        var date = first;
+
+        for (var i = 0; i < MaxClosedDaysInARow; i++)
+        {
+            if (IsWeekday(date) &&
+                await calendar.IsTradingDayAsync(date, cancellationToken))
+            {
+                return date;
+            }
+
+            date = date.AddDays(-1);
+        }
+
+        // A calendar that never says "open": fall back to the weekday rule.
+        date = first;
+
+        while (!IsWeekday(date))
+        {
+            date = date.AddDays(-1);
+        }
+
+        return date;
+    }
+
     private static DateTimeOffset SessionOpen(DateOnly date) => SessionTime(date, Open);
 
     private static DateTimeOffset SessionTime(DateOnly date, TimeSpan timeOfDay)

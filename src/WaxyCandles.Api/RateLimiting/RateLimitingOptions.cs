@@ -15,7 +15,10 @@ public sealed class RateLimitingOptions
     /// </summary>
     public FixedWindowLimit MarketData { get; set; } = new() { PermitLimit = 30 };
 
-    /// <summary>Per user. Every history import is a billed provider call.</summary>
+    /// <summary>
+    /// Per user, shared by the history import and backtests (which import
+    /// missing history first). Every import is a billed provider call.
+    /// </summary>
     public FixedWindowLimit HistoryImport { get; set; } = new() { PermitLimit = 5 };
 
     /// <summary>
