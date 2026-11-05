@@ -1,3 +1,5 @@
+using WaxyCandles.Application.Backtesting;
+using WaxyCandles.Infrastructure.Backtesting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -70,6 +72,7 @@ public static class DependencyInjection
         services.Configure<GexOptions>(
             configuration.GetSection(GexOptions.SectionName));
         services.AddScoped<IGexService, GexService>();
+        services.AddScoped<IBacktestService, BacktestService>();
         services.AddScoped<IGexLevelBoardSource, GexLevelBoardSource>();
         services.AddScoped<IGexLevelAlertRefresher, GexLevelAlertRefresher>();
 

@@ -18,4 +18,17 @@ public interface IMarketDataProvider
         string symbol,
         CandleInterval interval,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Daily candles for trading dates <paramref name="from"/> to
+    /// <paramref name="to"/> (inclusive), each stamped at UTC midnight of its
+    /// trading date, oldest first. A provider may return less than the range
+    /// (e.g. a symbol that listed later, or a plan's history limit). One billed
+    /// request.
+    /// </summary>
+    Task<IReadOnlyList<StockCandle>> GetDailyCandlesAsync(
+        string symbol,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken = default);
 }

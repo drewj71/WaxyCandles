@@ -303,6 +303,31 @@ public class MarketDataAppMarketDataProviderTests
     }
 
     [Fact]
+    public async Task Ranged_daily_candles_ask_for_those_trading_dates_in_one_request()
+    {
+        _handler.RespondWith(DailyJson);
+
+        var candles = await Provider().GetDailyCandlesAsync(
+            " aapl ",
+            new DateOnly(2006, 9, 1),
+            new DateOnly(2026, 9, 2));
+
+        var request = Assert.Single(_handler.Requests);
+        Assert.Equal(
+            "/v1/stocks/candles/D/AAPL/",
+            request.Uri.AbsolutePath);
+        Assert.Equal("?from=2006-09-01&to=2026-09-02", request.Uri.Query);
+
+        Assert.Equal(
+            [
+                new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero)
+            ],
+            candles.Select(c => c.Timestamp));
+        Assert.All(candles, c => Assert.Equal(CandleInterval.OneDay, c.Interval));
+    }
+
+    [Fact]
     public async Task Daily_candle_timestamp_is_utc_midnight_of_the_trading_date()
     {
         // Same convention as the Alpha Vantage provider, so candle dedup by

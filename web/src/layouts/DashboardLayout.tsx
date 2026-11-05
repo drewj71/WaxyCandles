@@ -3,6 +3,7 @@ import {
     BarChart3,
     Bell,
     Flame,
+    FlaskConical,
     LayoutDashboard,
     LogOut,
     Settings,
@@ -62,6 +63,11 @@ const navigation = [
         title: "GEX",
         icon: Flame,
         href: "/gex",
+    },
+    {
+        title: "Backtest",
+        icon: FlaskConical,
+        href: "/backtest",
     },
     {
         title: "Alerts",
