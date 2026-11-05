@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/card";
 
 import StockCandlestickChart from "@/components/charts/StockCandlestickChart";
+import LiveIndicator from "@/components/LiveIndicator";
+import { useLivePrices } from "@/hooks/use-live-prices";
 
 function Stock() {
     const { symbol } = Route.useParams();
@@ -45,6 +47,9 @@ function Stock() {
 
         enabled: !!symbol,
     });
+
+    // New prices update the quote and the forming candle in this query's cache.
+    const liveState = useLivePrices(symbol ? [symbol] : []);
 
     const loadingTimeframe =
         stockQuery.isFetching &&
@@ -131,9 +136,7 @@ function Stock() {
                         </Button>
                     </div>
 
-                    <p className="text-sm text-muted-foreground">
-                        Market data
-                    </p>
+                    <LiveIndicator state={liveState} />
                 </div>
 
                 <div className="text-right">
@@ -266,7 +269,9 @@ function Stock() {
 
                     <CardContent>
                         <p className="text-xl font-semibold">
-                            {quote.volume.toLocaleString()}
+                            {stock.historicalCandles.length > 0
+                                ? stock.historicalCandles.at(-1)!.volume.toLocaleString()
+                                : "—"}
                         </p>
                     </CardContent>
                 </Card>

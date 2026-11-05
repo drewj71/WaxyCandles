@@ -15,6 +15,7 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
 
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<Watchlist> Watchlists => Set<Watchlist>();
+    public DbSet<WatchlistItem> WatchlistItems => Set<WatchlistItem>();
     public DbSet<StockPrice> StockPrices => Set<StockPrice>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
@@ -55,8 +56,37 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<Alert>()
             .HasIndex(x => x.Symbol);
 
-        builder.Entity<Watchlist>()
-            .HasIndex(x => new { x.UserId, x.Symbol }).IsUnique();
+        builder.Entity<Watchlist>(entity =>
+        {
+            // No foreign key to AspNetUsers, as before the lists existed: rows
+            // from before then may belong to users that are gone.
+            entity.Property(x => x.UserId)
+                .IsRequired();
+
+            entity.Property(x => x.Name)
+                .HasMaxLength(Watchlist.NameMaxLength)
+                .IsRequired();
+
+            entity.HasIndex(x => new { x.UserId, x.Name })
+                .IsUnique();
+
+            entity.HasMany(x => x.Items)
+                .WithOne()
+                .HasForeignKey(x => x.WatchlistId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<WatchlistItem>(entity =>
+        {
+            entity.Property(x => x.Symbol)
+                .IsRequired();
+
+            entity.HasIndex(x => new { x.WatchlistId, x.Symbol })
+                .IsUnique();
+
+            // The price poller reads the distinct symbols across every list.
+            entity.HasIndex(x => x.Symbol);
+        });
 
         builder.Entity<StockCandle>()
             .HasIndex(x => new

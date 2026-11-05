@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getWatchlistQuotes } from "@/api/watchlist";
+import { getWatchlists, watchlistsQueryKey } from "@/api/watchlists";
 import { getAlerts } from "@/api/alerts";
 import { getMarketStatus } from "@/api/market";
 import {
@@ -31,8 +31,8 @@ function formatEastern(iso: string): string {
 
 function Dashboard() {
     const watchlistQuery = useQuery({
-        queryKey: ["watchlist"],
-        queryFn: getWatchlistQuotes,
+        queryKey: watchlistsQueryKey,
+        queryFn: getWatchlists,
     });
 
     const alertsQuery = useQuery({
@@ -48,7 +48,10 @@ function Dashboard() {
         refetchInterval: 60_000,
     });
 
-    const stocks = watchlistQuery.data ?? [];
+    // Distinct symbols across all of the user's lists.
+    const stocks = [
+        ...new Set((watchlistQuery.data ?? []).flatMap((list) => list.symbols)),
+    ];
     const alerts = alertsQuery.data ?? [];
 
     // Armed and watching: excludes fired, disabled and expired alerts.

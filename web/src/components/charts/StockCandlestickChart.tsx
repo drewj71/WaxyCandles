@@ -99,6 +99,11 @@ function StockCandlestickChart({
     const candlesByTimeRef =
         useRef(new Map<number, Candle>());
 
+    // What was last drawn, so a live tick (same candles, the last one changed
+    // or one appended) updates in place instead of resetting the zoom.
+    const drawnRef =
+        useRef<{ first: string; length: number; intraday: boolean } | null>(null);
+
     const [hoveredCandle, setHoveredCandle] =
         useState<Candle | null>(null);
 
@@ -207,6 +212,7 @@ function StockCandlestickChart({
 
             chartRef.current = null;
             seriesRef.current = null;
+            drawnRef.current = null;
         };
     }, []);
 
@@ -223,6 +229,40 @@ function StockCandlestickChart({
                 secondsVisible: false,
             },
         });
+
+        const drawn = drawnRef.current;
+        const first = candles[0]?.timestamp ?? "";
+
+        if (
+            drawn &&
+            candles.length > 0 &&
+            drawn.first === first &&
+            drawn.intraday === intraday &&
+            (candles.length === drawn.length ||
+                candles.length === drawn.length + 1)
+        ) {
+            const last = candles.at(-1)!;
+            const time = chartTime(last.timestamp, intraday);
+
+            candlesByTimeRef.current.set(time, last);
+            seriesRef.current.update({
+                time,
+                open: last.open,
+                high: last.high,
+                low: last.low,
+                close: last.close,
+            });
+            volumeSeriesRef.current.update({
+                time,
+                value: last.volume,
+                color: last.close >= last.open ? "#22c55e" : "#ef4444",
+            });
+
+            drawnRef.current = { first, length: candles.length, intraday };
+            return;
+        }
+
+        drawnRef.current = { first, length: candles.length, intraday };
 
         const times = candles.map((candle) =>
             chartTime(candle.timestamp, intraday),

@@ -141,6 +141,34 @@ public class MarketDataServiceTests(IntegrationFixture fixture)
     }
 
     [Fact]
+    public async Task Polls_the_distinct_symbols_across_every_users_lists_plus_alert_symbols()
+    {
+        // Named lists: one symbol in several lists, of one user or several, is
+        // still one request; symbols from every list (not just the first) count.
+        await WatchlistSeed.AddAsync(ConnectionString, "user-1", "AAPL", "Tech");
+        await WatchlistSeed.AddAsync(ConnectionString, "user-1", "MSFT", "Tech");
+        await WatchlistSeed.AddAsync(ConnectionString, "user-1", "AAPL", "Dividends");
+        await WatchlistSeed.AddAsync(ConnectionString, "user-1", "KO", "Dividends");
+        await WatchlistSeed.AddAsync(ConnectionString, "user-2", "MSFT", "Mine");
+        await WatchlistSeed.AddAsync(ConnectionString, "user-3", "NVDA", "Later list");
+        await SeedAlertAsync("TSLA");
+        await SeedAlertAsync("KO");
+
+        // An empty list adds nothing.
+        await using (var db = NewDbContext())
+        {
+            db.Watchlists.Add(new Watchlist { Id = Guid.NewGuid(), UserId = "user-4", Name = "Empty" });
+            await db.SaveChangesAsync();
+        }
+
+        await UpdatePricesAsync();
+
+        Assert.Equal(
+            ["AAPL", "KO", "MSFT", "NVDA", "TSLA"],
+            _provider.QuoteRequests.Order().ToArray());
+    }
+
+    [Fact]
     public async Task Polls_only_symbols_with_an_alert_that_still_needs_prices()
     {
         await SeedAlertAsync("ARMD");                                         // armed
@@ -240,15 +268,6 @@ public class MarketDataServiceTests(IntegrationFixture fixture)
         await db.SaveChangesAsync();
     }
 
-    private async Task SeedWatchlistAsync(string symbol)
-    {
-        await using var db = NewDbContext();
-        db.Watchlists.Add(new Watchlist
-        {
-            Id = Guid.NewGuid(),
-            UserId = "user-1",
-            Symbol = symbol
-        });
-        await db.SaveChangesAsync();
-    }
+    private Task SeedWatchlistAsync(string symbol) =>
+        WatchlistSeed.AddAsync(ConnectionString, "user-1", symbol);
 }
