@@ -51,11 +51,7 @@ public class DecimalPrecisionRoundTripTests(IntegrationFixture fixture)
     [Fact]
     public async Task Polled_quote_keeps_full_precision()
     {
-        await using (var db = NewDbContext())
-        {
-            db.Watchlists.Add(new Watchlist { Id = Guid.NewGuid(), UserId = "user-1", Symbol = "AAPL" });
-            await db.SaveChangesAsync();
-        }
+        await WatchlistSeed.AddAsync(ConnectionString, "user-1", "AAPL");
 
         var provider = new FakeMarketDataProvider();
         provider.Quotes["AAPL"] = new()

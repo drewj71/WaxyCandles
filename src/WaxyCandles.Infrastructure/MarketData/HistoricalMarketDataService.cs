@@ -103,8 +103,12 @@ public class HistoricalMarketDataService
             {
                 Symbol = latestPrice.Symbol,
                 Price = latestPrice.Price,
+                // The vendor's change is against the previous close.
+                PreviousClose = latestPrice.Price - latestPrice.Change,
                 Change = latestPrice.Change,
-                ChangePercent = latestPrice.ChangePercent
+                ChangePercent = latestPrice.ChangePercent,
+                // Lets the web app tell a pushed live price from an older one.
+                QuotedAt = latestPrice.Timestamp
             };
 
         return new StockDetailsDto

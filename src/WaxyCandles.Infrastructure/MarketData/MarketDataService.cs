@@ -31,7 +31,8 @@ public class MarketDataService : IMarketDataService
             .Distinct()
             .ToListAsync(cancellationToken);
 
-        var watchlistSymbols = await _dbContext.Watchlists
+        // Every symbol in any user's list, once.
+        var watchlistSymbols = await _dbContext.WatchlistItems
             .Select(w => w.Symbol)
             .Distinct()
             .ToListAsync(cancellationToken);

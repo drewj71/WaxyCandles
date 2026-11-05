@@ -120,6 +120,18 @@ public static class WaxyCandlesMetrics
         unit: "{credit}",
         description: "Market Data credits consumed, from each response's X-Api-Ratelimit-Consumed header, by endpoint kind.");
 
+    // ---- Live prices (API) ----
+
+    public static readonly Counter<long> LivePricesPushed = Meter.CreateCounter<long>(
+        "waxycandles.live_prices.pushed",
+        unit: "{price}",
+        description: "Newly stored prices pushed to subscribed browsers (one per symbol, however many clients watch it).");
+
+    public static readonly Counter<long> LivePriceChecks = Meter.CreateCounter<long>(
+        "waxycandles.live_prices.checks",
+        unit: "{check}",
+        description: "Live price loop passes that queried the database, by outcome (success/failure). Passes with no subscriptions don't query and aren't counted.");
+
     // ---- Gauge state, written by the owning loops ----
 
     // long.MinValue = not reported yet. Plain longs (not long?) so reads and
