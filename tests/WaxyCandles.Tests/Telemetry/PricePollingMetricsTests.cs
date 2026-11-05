@@ -101,17 +101,8 @@ public class PricePollingMetricsTests(IntegrationFixture fixture)
         await _workers.StartAsync<WaxyCandles.PricePollingWorker.PricePollingWorker>(services);
     }
 
-    private async Task SeedWatchlistAsync(string symbol)
-    {
-        await using var db = NewDbContext();
-        db.Watchlists.Add(new Watchlist
-        {
-            Id = Guid.NewGuid(),
-            UserId = "user-1",
-            Symbol = symbol
-        });
-        await db.SaveChangesAsync();
-    }
+    private Task SeedWatchlistAsync(string symbol) =>
+        WatchlistSeed.AddAsync(ConnectionString, "user-1", symbol);
 
     private sealed class NoLevelAlerts : IGexLevelAlertRefresher
     {

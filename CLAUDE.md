@@ -30,7 +30,7 @@ For an end-to-end run, RabbitMQ plus the API and all three workers must be runni
 
 EF Core migrations live in `src/WaxyCandles.Infrastructure/Migrations` and are committed to source control.
 
-The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, metrics, retention, health checks, SQL retry and fault injection (`Resilience/`, an EF interceptor that throws a real transient `SqlException`, including after a real commit), rate limiting, refresh-token reuse and startup config, about 620 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. Metric tests use `MetricRecorder` (a `MeterListener`) in the non-parallel `Metrics` collection. A full run takes about 12 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
+The test project (`tests/WaxyCandles.Tests`, xUnit) covers the API, consumers, outbox, alert races, market data providers, GEX, tracing, metrics, retention, health checks, SQL retry and fault injection (`Resilience/`, an EF interceptor that throws a real transient `SqlException`, including after a real commit), rate limiting, refresh-token reuse, watchlists, live prices, backtesting and startup config, about 750 tests. Integration tests use real SQL Server and RabbitMQ through Testcontainers (Docker must be running) and share one sequential collection; keep to that rather than mocking the infrastructure. Metric tests use `MetricRecorder` (a `MeterListener`) in the non-parallel `Metrics` collection. A full run takes about 15 minutes. If the API or workers are running locally they lock `bin/`, so build/test with `--artifacts-path <somewhere else>`.
 
 ### Frontend (from `web/`)
 
@@ -59,6 +59,7 @@ Optional non-secret settings with defaults in code:
 - `RabbitMQ:PrefetchCount`: consumers, default 10. An invalid value logs a warning and uses 10.
 - The OutboxWorker's `Retention:{Interval,InitialDelay,OutboxMessageRetention,ProcessedMessageRetention,StockPriceRetention,RefreshTokenRetention,BatchSize}`: see Async pipeline.
 - `Database:MaxRetryCount` (3, 0–10) and `Database:MaxRetryDelay` (5 s, at most 30 s): see Resilience.
+- API: `LivePrices:PollInterval` (2 s, 500 ms–1 min) and `LivePrices:MaxSubscriptionsPerConnection` (100, 1–1000): see Live prices.
 - `MarketDataApp:Timeout` (20 s), `MarketDataApp:OptionsTimeout` (30 s) and `AlphaVantage:Timeout` (20 s), each at most 2 minutes.
 - Workers: `Health:{HeartbeatFile,Period,OutboxLoopMaxAge,ConsumerMaxProcessingTime,PricePolling:MaxPollAge}`: see Health checks.
 
@@ -77,10 +78,10 @@ All except `PrefetchCount` are validated at startup (including upper bounds), an
 Projects under `src/` follow a clean/onion architecture:
 
 - **WaxyCandles.Domain** — entities/enums, no dependencies on anything else.
-- **WaxyCandles.Application** — interfaces, DTOs, and business operations, organized by feature (`Alerts/`, `Authentication/`, `MarketData/`, `Watchlists/`, `Notifications/`). Depends only on Domain.
+- **WaxyCandles.Application** — interfaces, DTOs, and business operations, organized by feature (`Alerts/`, `Authentication/`, `Backtesting/`, `MarketData/`, `Watchlists/`, `Notifications/`). Depends only on Domain.
 - **WaxyCandles.Infrastructure** — implements Application's interfaces: EF Core persistence (`Persistence/`), Identity (`Identity/`), RabbitMQ messaging (`Messaging/`), market-data provider integrations (`MarketData/Providers/`). DI wiring lives in `DependencyInjection.cs` (`AddInfrastructure`, `AddApiAuthentication`).
 - **WaxyCandles.Api** — ASP.NET Core Web API; thin controllers (`Controllers/`) that call into Application services. JWT bearer auth (from an httpOnly cookie), Swagger/OpenAPI in Development only, CORS limited to `Cors:AllowedOrigins`.
-  - Rate limiting (built-in limiter, `Api/RateLimiting`, optional `RateLimiting:{MarketData,HistoryImport,Auth}:{PermitLimit,Window}`): fixed windows, no queue, 429 with `Retry-After`. `market-data` (30/min per user) covers GEX and alert create/update, since level alerts resolve a board; `history-import` 5/min per user; `auth` 10/min per client IP on login/register (refresh/logout unlimited). Behind a reverse proxy the IP limit is shared by every client until forwarded headers are configured.
+  - Rate limiting (built-in limiter, `Api/RateLimiting`, optional `RateLimiting:{MarketData,HistoryImport,Auth}:{PermitLimit,Window}`): fixed windows, no queue, 429 with `Retry-After`. `market-data` (30/min per user) covers GEX and alert create/update, since level alerts resolve a board; `history-import` 5/min per user, shared by `POST /api/backtests` (so a backtest on stored data still uses the allowance); `auth` 10/min per client IP on login/register (refresh/logout unlimited). Behind a reverse proxy the IP limit is shared by every client until forwarded headers are configured.
   - Login uses `CheckPasswordSignInAsync` with lockout (5 failures, then 5 minutes). A locked account gets the same 401 as a wrong password.
   - Refresh tokens are stored only as `RefreshToken.TokenHash`, the SHA-256 of the token's UTF-8 bytes (`TokenService.HashRefreshToken`, `binary(32)`, unique). Look tokens up by hash, and never store or log the plaintext.
   - **Families:** each login or register starts a `FamilyId`, and refresh rotates within it.
@@ -91,6 +92,18 @@ Projects under `src/` follow a clean/onion architecture:
 - **WaxyCandles.PricePollingWorker / AlertWorker / OutboxWorker** — standalone background-service executables, each with their own `appsettings*.json`.
 
 Market data access is abstracted behind `IMarketDataProvider` (Application layer) so vendors can be swapped without touching controllers or business logic. The non-secret `MarketData:Provider` setting picks one: `MarketDataApp` (marketdata.app, set in the API and PricePollingWorker appsettings and the default in Docker) or `AlphaVantage` (the fallback when unset). Both providers store daily candles at UTC midnight of the trading date, so candle dedup holds across a switch.
+
+### Watchlists
+
+A user has named lists (`Watchlists`: Name, SortOrder; `WatchlistItems`: Symbol, SortOrder, AddedAt; unique per list and per user name), managed through `/api/watchlists`. Limits are `WatchlistRules` constants (20 lists, 50 symbols per list); another user's list is a 404. The old `/api/watchlist` endpoints act on the user's first list (creating "My Watchlist" on first add). Migration `NamedWatchlists` moved each user's rows into "My Watchlist"; it is hand-written with `sp_rename`, and its Down keeps one row per (user, symbol). The poller polls the distinct symbols across all lists plus alert symbols. Quotes read the latest stored prices through `LatestStockPrices` (one `CROSS APPLY TOP(1)` seek per symbol); day range is the stored prices' low/high over the last 12 hours, and volume and the 30-day sparkline come from stored daily candles.
+
+### Live prices
+
+`LivePriceBroadcaster` (hosted in the API) pushes new stored prices to browsers over `PricesHub` (`/hubs/prices`, cookie-authenticated). Clients call `Subscribe`/`Unsubscribe(symbol)`; `LivePriceSubscriptions` tracks them in memory per instance (cap `LivePrices:MaxSubscriptionsPerConnection`, 100). Every `LivePrices:PollInterval` (2 s) it runs one `LatestStockPrices` query for the subscribed symbols (none when nobody is subscribed) and pushes only prices newer than the last push to that symbol's group. It only reads `StockPrices`: no RabbitMQ, outbox or vendor calls, and each API instance serves its own clients, so it needs no backplane. Failures are logged once per outage and retried next pass. Metrics `live_prices.pushed` and `live_prices.checks` (by outcome).
+
+### Backtesting
+
+`POST /api/backtests` (web page `/backtest`) runs a long-only strategy over stored daily candles. `BacktestCalculator` (Application/Backtesting) is pure: a strategy (`IBacktestStrategy`: MA crossover SMA/EMA, RSI mean reversion, Donchian breakout, buy-and-hold) sees one bar at a time after its close, and a signal fills at the next bar's open, all-in with fractional shares, commission (fixed and %) and slippage (bp). Buy-and-hold is always run as the benchmark. Sharpe uses daily equity returns, √252, risk-free 0. `BacktestService` (Infrastructure) caps the range at 20 years, ends a range reaching today at the last closed session, and if `CandleCoverage` says the stored candles don't cover it, makes exactly one ranged import (`IMarketDataProvider.GetDailyCandlesAsync`) before running on what is stored. Imports retry on a unique-key collision from what is stored. Alpha Vantage only returns about 100 days of daily history, so long backtests need `MarketDataApp`.
 
 ### Options and GEX
 
@@ -197,7 +210,7 @@ The app is mid-refactor from plain React Router to TanStack Router + TanStack Qu
 
 - `web/src/routes/` contains **file-based route definitions only** — each file is a thin `createFileRoute(...)` wrapper that points `component` at a page from `web/src/pages/`. Route files should stay thin; actual page logic belongs in `pages/`.
 - `web/src/routeTree.gen.ts` is **generated** by the `@tanstack/router-plugin` Vite plugin from `routes/` — never hand-edit it; it regenerates on dev/build.
-- `web/src/api/` holds API client modules per resource (`alerts.ts`, `auth.ts`, `stocks.ts`, `watchlist.ts`), all going through the shared `client.ts` (axios instance, uses cookie-based auth rather than localStorage).
+- `web/src/api/` holds API client modules per resource (`alerts.ts`, `auth.ts`, `backtests.ts`, `prices.ts`, `stocks.ts`, `watchlists.ts`, ...), all going through the shared `client.ts` (axios instance, uses cookie-based auth rather than localStorage).
 - `web/src/components/ui/` is shadcn-managed UI primitives (`components.json` config present); `components/charts/` holds chart-specific components (lightweight-charts / recharts).
 - Path alias `@/` maps to `web/src/` (configured in `vite.config.ts` and the `tsconfig*.json` files).
 - Auth uses httpOnly cookies set by the API, not localStorage, so the frontend doesn't need to manage tokens directly.

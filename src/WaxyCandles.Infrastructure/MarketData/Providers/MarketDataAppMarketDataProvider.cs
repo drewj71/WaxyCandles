@@ -150,10 +150,39 @@ public class MarketDataAppMarketDataProvider : IMarketDataProvider
             ? DailyLookback
             : IntradayLookback);
 
-        using var document = await GetAsync(
-            $"{BaseUrl}/stocks/candles/{resolution}/{Uri.EscapeDataString(normalizedSymbol)}/" +
+        return await GetCandlesAsync(
+            normalizedSymbol,
+            interval,
+            resolution,
             $"?from={from.ToUnixTimeSeconds()}" +
             $"&to={to.ToUnixTimeSeconds()}",
+            cancellationToken);
+    }
+
+    public Task<IReadOnlyList<StockCandle>> GetDailyCandlesAsync(
+        string symbol,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken = default) =>
+        // Dates (not instants) select trading dates, both ends inclusive.
+        // Daily candles cost 1 credit per 1,000, so 20 years is about 5 credits.
+        GetCandlesAsync(
+            symbol.Trim().ToUpperInvariant(),
+            CandleInterval.OneDay,
+            "D",
+            $"?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}",
+            cancellationToken);
+
+    private async Task<IReadOnlyList<StockCandle>> GetCandlesAsync(
+        string normalizedSymbol,
+        CandleInterval interval,
+        string resolution,
+        string range,
+        CancellationToken cancellationToken)
+    {
+        using var document = await GetAsync(
+            $"{BaseUrl}/stocks/candles/{resolution}/{Uri.EscapeDataString(normalizedSymbol)}/" +
+            range,
             cancellationToken);
 
         if (document is null)

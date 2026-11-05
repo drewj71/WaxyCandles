@@ -74,6 +74,20 @@ public class StartupConfigurationTests(IntegrationFixture fixture) : ApiTestBase
     }
 
     [Theory]
+    [InlineData("LivePrices:PollInterval", "00:00:00.1")]
+    [InlineData("LivePrices:PollInterval", "00:05:00")]
+    [InlineData("LivePrices:MaxSubscriptionsPerConnection", "0")]
+    public async Task Invalid_live_prices_setting_fails_startup_naming_the_key(string key, string value)
+    {
+        var settings = Settings();
+        settings[key] = value;
+
+        var message = await StartupFailureAsync(settings);
+
+        Assert.Contains(key, message);
+    }
+
+    [Theory]
     [InlineData("/swagger/v1/swagger.json")]
     [InlineData("/swagger/index.html")]
     public async Task Swagger_is_not_served_outside_development(string url)

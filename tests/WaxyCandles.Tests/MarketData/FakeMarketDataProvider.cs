@@ -25,6 +25,12 @@ public sealed class FakeMarketDataProvider : IMarketDataProvider
 
     public IReadOnlyCollection<string> QuoteRequests => _quoteRequests.ToArray();
 
+    private readonly ConcurrentQueue<(string Symbol, DateOnly From, DateOnly To)> _dailyCandleRequests = new();
+
+    /// <summary>Every ranged daily-candle request, in order (each is a billed call on a real provider).</summary>
+    public IReadOnlyCollection<(string Symbol, DateOnly From, DateOnly To)> DailyCandleRequests =>
+        _dailyCandleRequests.ToArray();
+
     public void SetQuote(string symbol, decimal price, DateTimeOffset? quotedAt = null) =>
         Quotes[symbol] = new MarketQuote
         {
@@ -91,5 +97,26 @@ public sealed class FakeMarketDataProvider : IMarketDataProvider
             .ToList();
 
         return Task.FromResult(candles);
+    }
+
+    /// <summary>The daily candles in <see cref="Candles"/> for this symbol and date range.</summary>
+    public async Task<IReadOnlyList<StockCandle>> GetDailyCandlesAsync(
+        string symbol,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken = default)
+    {
+        _dailyCandleRequests.Enqueue((symbol, from, to));
+
+        var all = await GetHistoricalCandlesAsync(symbol, CandleInterval.OneDay, cancellationToken);
+
+        return all
+            .Where(c =>
+                string.Equals(c.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
+                c.Interval == CandleInterval.OneDay &&
+                DateOnly.FromDateTime(c.Timestamp.UtcDateTime) >= from &&
+                DateOnly.FromDateTime(c.Timestamp.UtcDateTime) <= to)
+            .OrderBy(c => c.Timestamp)
+            .ToList();
     }
 }

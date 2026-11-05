@@ -2,9 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import {
     createChart,
     CandlestickSeries,
+    createSeriesMarkers,
     HistogramSeries,
     type IChartApi,
     type ISeriesApi,
+    type ISeriesMarkersPluginApi,
+    type SeriesMarker,
+    type Time,
     type UTCTimestamp,
 } from "lightweight-charts";
 
@@ -17,9 +21,19 @@ type Candle = {
     volume: number;
 };
 
+/** A trade arrow on a candle: buys below the bar, sells above it. */
+export type CandleMarker = {
+    /** The candle's timestamp (same format as the candles). */
+    timestamp: string;
+    side: "buy" | "sell";
+    text?: string;
+};
+
 type StockCandlestickChartProps = {
     candles: Candle[];
     timeframe: string;
+    /** Optional, e.g. a backtest's fills. */
+    markers?: CandleMarker[];
 };
 
 const easternParts = new Intl.DateTimeFormat("en-US", {
@@ -81,6 +95,7 @@ function candleLabel(timestamp: string, intraday: boolean): string {
 function StockCandlestickChart({
     candles,
     timeframe,
+    markers,
 }: StockCandlestickChartProps) {
     const chartContainerRef =
         useRef<HTMLDivElement>(null);
@@ -94,10 +109,18 @@ function StockCandlestickChart({
     const volumeSeriesRef =
         useRef<ISeriesApi<"Histogram"> | null>(null);
 
+    const markersRef =
+        useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+
     // The candles currently drawn, by chart time, for the crosshair tooltip.
     // A ref so the handler registered once at mount sees the latest data.
     const candlesByTimeRef =
         useRef(new Map<number, Candle>());
+
+    // What was last drawn, so a live tick (same candles, the last one changed
+    // or one appended) updates in place instead of resetting the zoom.
+    const drawnRef =
+        useRef<{ first: string; length: number; intraday: boolean } | null>(null);
 
     const [hoveredCandle, setHoveredCandle] =
         useState<Candle | null>(null);
@@ -168,6 +191,7 @@ function StockCandlestickChart({
 
         chartRef.current = chart;
         seriesRef.current = candlestickSeries;
+        markersRef.current = createSeriesMarkers(candlestickSeries, []);
         volumeSeriesRef.current = volumeSeries;
 
         const handleResize = () => {
@@ -207,6 +231,8 @@ function StockCandlestickChart({
 
             chartRef.current = null;
             seriesRef.current = null;
+            drawnRef.current = null;
+            markersRef.current = null;
         };
     }, []);
 
@@ -223,6 +249,40 @@ function StockCandlestickChart({
                 secondsVisible: false,
             },
         });
+
+        const drawn = drawnRef.current;
+        const first = candles[0]?.timestamp ?? "";
+
+        if (
+            drawn &&
+            candles.length > 0 &&
+            drawn.first === first &&
+            drawn.intraday === intraday &&
+            (candles.length === drawn.length ||
+                candles.length === drawn.length + 1)
+        ) {
+            const last = candles.at(-1)!;
+            const time = chartTime(last.timestamp, intraday);
+
+            candlesByTimeRef.current.set(time, last);
+            seriesRef.current.update({
+                time,
+                open: last.open,
+                high: last.high,
+                low: last.low,
+                close: last.close,
+            });
+            volumeSeriesRef.current.update({
+                time,
+                value: last.volume,
+                color: last.close >= last.open ? "#22c55e" : "#ef4444",
+            });
+
+            drawnRef.current = { first, length: candles.length, intraday };
+            return;
+        }
+
+        drawnRef.current = { first, length: candles.length, intraday };
 
         const times = candles.map((candle) =>
             chartTime(candle.timestamp, intraday),
@@ -259,6 +319,25 @@ function StockCandlestickChart({
             ?.timeScale()
             .fitContent();
     }, [candles, intraday]);
+
+    useEffect(() => {
+        if (!markersRef.current) {
+            return;
+        }
+
+        // Markers must be in time order.
+        const seriesMarkers: SeriesMarker<Time>[] = (markers ?? [])
+            .map((marker) => ({
+                time: chartTime(marker.timestamp, intraday),
+                position: marker.side === "buy" ? "belowBar" as const : "aboveBar" as const,
+                shape: marker.side === "buy" ? "arrowUp" as const : "arrowDown" as const,
+                color: marker.side === "buy" ? "#22c55e" : "#ef4444",
+                text: marker.text,
+            }))
+            .sort((a, b) => a.time - b.time);
+
+        markersRef.current.setMarkers(seriesMarkers);
+    }, [markers, intraday]);
 
     return (
         <div

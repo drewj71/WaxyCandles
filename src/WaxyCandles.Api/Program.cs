@@ -9,6 +9,8 @@ using WaxyCandles.Infrastructure.Telemetry;
 using OpenTelemetry.Trace;
 using WaxyCandles.Api.RateLimiting;
 using WaxyCandles.Api.Health;
+using WaxyCandles.Application.MarketData.LivePrices;
+using WaxyCandles.Infrastructure.LivePrices;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,6 +38,11 @@ builder.Services.AddSignalR()
     });
 builder.Services.AddSingleton<IRealtimeNotifier, SignalRNotifier>();
 builder.Services.AddHostedService<AlertTriggeredConsumer>();
+
+// Live prices: the PricesHub, and a loop that pushes newly stored prices of
+// the symbols this instance's clients watch (reads StockPrices only).
+builder.Services.AddLivePrices(builder.Configuration);
+builder.Services.AddSingleton<ILivePriceNotifier, SignalRLivePriceNotifier>();
 
 // The web app's origin(s). Required: with cookie auth the browser only sends
 // credentials cross-origin to an exact allowed origin. Development gets the
@@ -144,5 +151,6 @@ app.UseRateLimiter();
 app.MapControllers();
 app.MapApiHealthChecks();
 app.MapHub<NotificationsHub>(NotificationsHub.Path);
+app.MapHub<PricesHub>(PricesHub.Path);
 
 app.Run();

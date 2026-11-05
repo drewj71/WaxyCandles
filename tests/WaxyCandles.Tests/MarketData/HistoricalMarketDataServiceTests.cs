@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using WaxyCandles.Application.MarketData.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using WaxyCandles.Domain.Entities;
 using WaxyCandles.Domain.Enums;
@@ -82,6 +84,58 @@ public class HistoricalMarketDataServiceTests(IntegrationFixture fixture)
 
         await using var db = NewDbContext();
         Assert.Equal(2, await db.StockCandles.CountAsync());
+    }
+
+    [Fact]
+    public async Task Ranged_daily_import_stores_only_missing_candles_and_counts_them()
+    {
+        _provider.Candles = Days("AAPL", CandleInterval.OneDay, 0, 1, 2, 3);
+        await using (var db = NewDbContext())
+        {
+            db.StockCandles.AddRange(Days("AAPL", CandleInterval.OneDay, 1));
+            await db.SaveChangesAsync();
+        }
+
+        await using var importDb = NewDbContext();
+        var added = await new HistoricalMarketDataService(importDb, _provider).ImportDailyCandlesAsync(
+            "aapl",
+            DateOnly.FromDateTime(Day1.UtcDateTime),
+            DateOnly.FromDateTime(Day1.AddDays(2).UtcDateTime));
+
+        Assert.Equal(2, added);
+        Assert.Equal(
+            [Day1, Day1.AddDays(1), Day1.AddDays(2)],
+            await StoredTimestampsAsync("AAPL", CandleInterval.OneDay));
+        Assert.Single(_provider.DailyCandleRequests);
+    }
+
+    [Fact]
+    public async Task Concurrent_imports_of_the_same_candles_both_succeed_without_duplicates()
+    {
+        _provider.Candles = Days("AAPL", CandleInterval.OneDay, Enumerable.Range(0, 200).ToArray());
+        var from = DateOnly.FromDateTime(Day1.UtcDateTime);
+        var to = from.AddDays(199);
+
+        // The app's own DbContext (with its SQL retry), since concurrent inserts
+        // can deadlock, which the app retries. Each import sees the same empty
+        // table, so a save that hits the unique index starts again from what
+        // the others stored.
+        await using var services = Fixture.BuildServices(
+            ConnectionString,
+            s => s.AddSingleton<IMarketDataProvider>(_provider));
+
+        var imports = Enumerable.Range(0, 4).Select(async _ =>
+        {
+            await using var scope = services.CreateAsyncScope();
+            return await scope.ServiceProvider
+                .GetRequiredService<IHistoricalMarketDataService>()
+                .ImportDailyCandlesAsync("AAPL", from, to);
+        });
+
+        var added = await Task.WhenAll(imports);
+
+        Assert.Equal(200, added.Sum());
+        Assert.Equal(200, (await StoredTimestampsAsync("AAPL", CandleInterval.OneDay)).Count);
     }
 
     [Fact]

@@ -8,6 +8,8 @@ export interface StockQuote {
     changePercent: number;
     volume: number;
     latestTradingDay: string | null;
+    /** When the stored price was observed (ISO); null if unknown. */
+    quotedAt: string | null;
 }
 
 export interface StockCandle {

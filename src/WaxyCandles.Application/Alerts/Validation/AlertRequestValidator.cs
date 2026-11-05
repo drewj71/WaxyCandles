@@ -1,12 +1,12 @@
-using System.Text.RegularExpressions;
 using WaxyCandles.Application.Alerts.DTOs;
 using WaxyCandles.Application.Common.Exceptions;
+using WaxyCandles.Application.MarketData;
 using WaxyCandles.Application.Options.Gex;
 using WaxyCandles.Domain.Enums;
 
 namespace WaxyCandles.Application.Alerts.Validation;
 
-public static partial class AlertRequestValidator
+public static class AlertRequestValidator
 {
     public const int MinCooldownMinutes = 1;
 
@@ -17,24 +17,18 @@ public static partial class AlertRequestValidator
     // Prices are stored as decimal(18,6): 12 digits before the point.
     private const decimal MaxTargetPrice = 999_999_999_999m;
 
-    [GeneratedRegex("^[A-Z0-9.-]{1,10}$")]
-    private static partial Regex SymbolPattern();
-
     /// <summary>Uppercased and trimmed, as alerts store it.</summary>
     public static string NormalizeSymbol(string? symbol) =>
-        (symbol ?? string.Empty).Trim().ToUpperInvariant();
+        StockSymbol.Normalize(symbol);
 
     /// <exception cref="RequestValidationException">The request is invalid.</exception>
     public static void Validate(CreateAlertRequest request, DateTimeOffset now)
     {
         var errors = new Dictionary<string, string[]>();
 
-        if (!SymbolPattern().IsMatch(NormalizeSymbol(request.Symbol)))
+        if (!StockSymbol.IsValid(NormalizeSymbol(request.Symbol)))
         {
-            errors["symbol"] =
-            [
-                "Symbol must be 1-10 characters: letters, digits, '.' or '-'."
-            ];
+            errors["symbol"] = [StockSymbol.InvalidMessage];
         }
 
         ValidateSettings(
